@@ -1640,6 +1640,13 @@ void WindowContext::CreateVulkan() {
 			device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
 			device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
 		}
+		// NVIDIA DLSS / NGX CUDA kernel extensions
+		if (HasExtension(available_extensions, "VK_NVX_binary_import")) {
+			device_extensions.push_back("VK_NVX_binary_import");
+		}
+		if (HasExtension(available_extensions, "VK_NVX_image_view_handle")) {
+			device_extensions.push_back("VK_NVX_image_view_handle");
+		}
 		// KYTY_GPU_TIMING (diagnostic) and KYTY_EOP_TIMESTAMPS=gpu only: maps GPU timestamps to the
 		// CPU clock and extends timestamp ordering guarantees across submissions. Not enabled for
 		// normal play.

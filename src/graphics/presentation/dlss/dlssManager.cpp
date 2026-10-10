@@ -20,16 +20,17 @@ static void StreamlineLogCallback(sl::LogType type, const char* msg) {
 	}
 	switch (type) {
 		case sl::LogType::eError:
-			LOGF("[Streamline/DLSS][Error] %s\n", msg);
+			std::fprintf(stderr, "[Streamline/DLSS][Error] %s\n", msg);
 			break;
 		case sl::LogType::eWarn:
-			LOGF("[Streamline/DLSS][Warn] %s\n", msg);
+			std::printf("[Streamline/DLSS][Warn] %s\n", msg);
 			break;
 		case sl::LogType::eInfo:
 		default:
-			LOGF("[Streamline/DLSS][Info] %s\n", msg);
+			std::printf("[Streamline/DLSS][Info] %s\n", msg);
 			break;
 	}
+	std::fflush(stdout);
 }
 
 static sl::DLSSMode ConvertDLSSMode(DLSSMode mode) noexcept {
@@ -141,23 +142,65 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 		return false;
 	}
 
+	vk::PhysicalDeviceIDProperties id_props {};
+	vk::PhysicalDeviceProperties2 props2 {};
+	props2.pNext = &id_props;
+	graphics.physical_device.getProperties2(&props2);
+
+	std::printf("[DLSS] Initializing on GPU: %s (Vendor: 0x%04X, LUID valid: %d)\n",
+	            graphics.GetPhysicalDeviceProperties().deviceName.data(),
+	            graphics.GetPhysicalDeviceProperties().vendorID,
+	            id_props.deviceLUIDValid ? 1 : 0);
+
 	sl::AdapterInfo adapter_info {};
-	adapter_info.vkPhysicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
+	if (id_props.deviceLUIDValid) {
+		adapter_info.deviceLUID = id_props.deviceLUID.data();
+		adapter_info.deviceLUIDSizeInBytes = static_cast<uint32_t>(id_props.deviceLUID.size());
+	}
 	res = slIsFeatureSupported(sl::kFeatureDLSS, adapter_info);
+	std::printf("[DLSS] slIsFeatureSupported (LUID) result: %d\n", static_cast<int>(res));
+
 	if (res != sl::Result::eOk) {
-		m_status = DLSSStatus::Unsupported;
-		m_status_message = "NVIDIA DLSS is unsupported on current GPU (RTX series required)";
-		LOGF("[DLSS] %s (result %d)\n", m_status_message.c_str(), static_cast<int>(res));
-		m_available = false;
-		return false;
+		adapter_info.deviceLUID = nullptr;
+		adapter_info.deviceLUIDSizeInBytes = 0;
+		adapter_info.vkPhysicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
+		res = slIsFeatureSupported(sl::kFeatureDLSS, adapter_info);
+		std::printf("[DLSS] slIsFeatureSupported (VkPhysicalDevice) result: %d\n", static_cast<int>(res));
+	}
+
+	// Explicitly ensure feature is loaded for this device
+	slSetFeatureLoaded(sl::kFeatureDLSS, true);
+	bool is_loaded = false;
+	const sl::Result load_res = slIsFeatureLoaded(sl::kFeatureDLSS, is_loaded);
+	std::printf("[DLSS] slIsFeatureLoaded result: %d, loaded: %d\n", static_cast<int>(load_res), is_loaded ? 1 : 0);
+
+	if (res != sl::Result::eOk && !is_loaded) {
+		// As a final check, test if DLSS optimal settings can be queried on the active device
+		sl::DLSSOptions test_opt {};
+		test_opt.mode = sl::DLSSMode::eMaxQuality;
+		test_opt.outputWidth = 1920;
+		test_opt.outputHeight = 1080;
+		sl::DLSSOptimalSettings opt_settings {};
+		if (slDLSSGetOptimalSettings(test_opt, opt_settings) == sl::Result::eOk) {
+			std::printf("[DLSS] slDLSSGetOptimalSettings succeeded -> DLSS is supported and active!\n");
+			res = sl::Result::eOk;
+		} else {
+			m_status = DLSSStatus::Unsupported;
+			m_status_message = fmt::format("DLSS unsupported on GPU (res {}, load {})", static_cast<int>(res), static_cast<int>(load_res));
+			std::printf("[DLSS] %s\n", m_status_message.c_str());
+			std::fflush(stdout);
+			m_available = false;
+			return false;
+		}
 	}
 
 	m_streamline_loaded = true;
 	m_available = true;
 	m_status = DLSSStatus::Available;
 	m_status_message = "NVIDIA DLSS Initialized and Available";
-	LOGF("[DLSS] Streamline and DLSS initialized successfully on GPU: %s\n",
-	     graphics.GetPhysicalDeviceProperties().deviceName.data());
+	std::printf("[DLSS] Streamline and DLSS initialized successfully on GPU: %s\n",
+	            graphics.GetPhysicalDeviceProperties().deviceName.data());
+	std::fflush(stdout);
 	return true;
 }
 
