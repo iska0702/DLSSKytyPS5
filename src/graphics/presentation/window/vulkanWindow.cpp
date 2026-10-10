@@ -27,6 +27,7 @@
 #include "graphics/presentation/videoOut.h"
 #include "graphics/presentation/window.h"
 #include "graphics/presentation/window/windowInternal.h"
+#include "graphics/presentation/dlss/dlssManager.h"
 #include "graphics/shader/recompiler/CodegenOptions.h"
 #include "graphics/shader/recompiler/backend/spirv/SpirvEmitter.h"
 #include "kernel/memory.h"
@@ -1678,6 +1679,20 @@ void WindowContext::CreateVulkan() {
 	graphic_ctx.submission_queue.Initialize(graphic_ctx);
 	render_context = std::make_unique<RenderContext>(graphic_ctx);
 	LibKernel::Memory::InstallGpuResources(render_context.get());
+
+	// Initialize NVIDIA DLSS if enabled
+	DLSSSettings dlss_settings {};
+	dlss_settings.enabled     = Config::DLSSEnabled();
+	dlss_settings.mode        = static_cast<DLSSMode>(Config::GetDLSSMode());
+	dlss_settings.sharpness   = Config::GetDLSSSharpness();
+	dlss_settings.preset      = static_cast<DLSSPreset>(Config::GetDLSSPreset());
+	dlss_settings.diagnostics = Config::DLSSDiagnosticsEnabled();
+	if (dlss_settings.enabled) {
+		if (!DLSSManager::Instance().Initialize(graphic_ctx, dlss_settings)) {
+			LOGF("[DLSS] Initialization did not succeed, fallback blitting will be used.\n");
+		}
+	}
+
 	presenter = std::make_unique<Presenter>(*this);
 }
 
@@ -1705,6 +1720,7 @@ WindowContext::~WindowContext() {
 	presenter.reset();
 	LibKernel::Memory::InstallGpuResources(nullptr);
 	render_context.reset();
+	DLSSManager::Instance().Shutdown(graphic_ctx);
 	graphic_ctx.submission_queue.Shutdown();
 
 	if (graphic_ctx.device != nullptr) {

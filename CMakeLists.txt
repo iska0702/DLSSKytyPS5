@@ -325,6 +325,8 @@ file(GLOB kyty_emulator_src CONFIGURE_DEPENDS
 	"${KYTY_SOURCE_DIR}/graphics/presentation/*.h"
 	"${KYTY_SOURCE_DIR}/graphics/presentation/window/*.cpp"
 	"${KYTY_SOURCE_DIR}/graphics/presentation/window/*.h"
+	"${KYTY_SOURCE_DIR}/graphics/presentation/dlss/*.cpp"
+	"${KYTY_SOURCE_DIR}/graphics/presentation/dlss/*.h"
 	"${KYTY_SOURCE_DIR}/kernel/*.cpp"
 	"${KYTY_SOURCE_DIR}/kernel/*.h"
 	"${KYTY_SOURCE_DIR}/loader/*.cpp"
@@ -569,6 +571,14 @@ set(inc_headers
 	${KYTY_THIRD_PARTY_DIR}/renderdoc
 	${KYTY_THIRD_PARTY_DIR}/stb
 )
+
+set(STREAMLINE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../streamline-sdk-v2.14.1")
+if(EXISTS "${STREAMLINE_SDK_DIR}")
+	list(APPEND inc_headers "${STREAMLINE_SDK_DIR}/include")
+	if(WIN32)
+		list(APPEND kyty_emulator_link_libraries "${STREAMLINE_SDK_DIR}/lib/x64/sl.interposer.lib")
+	endif()
+endif()
 
 if (KYTY_CLANG_CL)
 	list(APPEND kyty_emulator_link_libraries winpthread)
@@ -2195,6 +2205,25 @@ elseif(WIN32 OR LINUX)
 	target_link_options(kyty_emulator PRIVATE "-Wl,-Map=${KYTY_EMULATOR_MAP_LINK_PATH}")
 endif()
 
+if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
+	set(STREAMLINE_BIN_DIR "${STREAMLINE_SDK_DIR}/bin/x64")
+	set(STREAMLINE_DLLS
+		"${STREAMLINE_BIN_DIR}/sl.interposer.dll"
+		"${STREAMLINE_BIN_DIR}/sl.common.dll"
+		"${STREAMLINE_BIN_DIR}/sl.dlss.dll"
+		"${STREAMLINE_BIN_DIR}/nvngx_dlss.dll"
+	)
+	foreach(dll ${STREAMLINE_DLLS})
+		if(EXISTS "${dll}")
+			get_filename_component(dll_name "${dll}" NAME)
+			add_custom_command(TARGET kyty_emulator POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${dll}" "$<TARGET_FILE_DIR:kyty_emulator>/${dll_name}"
+			)
+		endif()
+	endforeach()
+endif()
+
 if(LINUX)
     target_link_options(kyty_emulator PRIVATE
         $<$<CONFIG:Release>:-Wl,--strip-all>
@@ -2223,4 +2252,13 @@ if(KYTY_BUILD_LAUNCHER)
 endif()
 if(KYTY_CLANG_CL)
 	install(FILES "${KYTY_THIRD_PARTY_DIR}/winpthread/bin/libwinpthread-1.dll" DESTINATION .)
+endif()
+if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
+	install(FILES
+		"${STREAMLINE_SDK_DIR}/bin/x64/sl.interposer.dll"
+		"${STREAMLINE_SDK_DIR}/bin/x64/sl.common.dll"
+		"${STREAMLINE_SDK_DIR}/bin/x64/sl.dlss.dll"
+		"${STREAMLINE_SDK_DIR}/bin/x64/nvngx_dlss.dll"
+		DESTINATION .
+	)
 endif()

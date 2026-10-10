@@ -52,6 +52,26 @@ if(KYTY_CLANG_CL)
 	)
 endif()
 
+set(STREAMLINE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../streamline-sdk-v2.14.1")
+if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
+	set(STREAMLINE_BIN_DIR "${STREAMLINE_SDK_DIR}/bin/x64")
+	set(STREAMLINE_DLLS
+		"${STREAMLINE_BIN_DIR}/sl.interposer.dll"
+		"${STREAMLINE_BIN_DIR}/sl.common.dll"
+		"${STREAMLINE_BIN_DIR}/sl.dlss.dll"
+		"${STREAMLINE_BIN_DIR}/nvngx_dlss.dll"
+	)
+	foreach(dll ${STREAMLINE_DLLS})
+		if(EXISTS "${dll}")
+			get_filename_component(dll_name "${dll}" NAME)
+			add_custom_command(TARGET launcher POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${dll}" "$<TARGET_FILE_DIR:launcher>/${dll_name}"
+			)
+		endif()
+	endforeach()
+endif()
+
 if(WIN32)
     find_program(QT_WINDEPLOYQT NAMES windeployqt PATHS "${Qt6_DIR}/../../../bin")
     if(NOT QT_WINDEPLOYQT)

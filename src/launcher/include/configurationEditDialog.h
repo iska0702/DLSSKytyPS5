@@ -41,6 +41,9 @@ private:
 	QListWidget*                 m_game_dirs_list         = nullptr;
 	QToolButton*                 m_remove_game_dir_button = nullptr;
 	bool                         m_global_settings        = false;
+	bool                         m_has_nvidia_rtx         = false;
+
+	void UpdateDLSSUI();
 
 protected:
 	void Init(const Configuration& info);

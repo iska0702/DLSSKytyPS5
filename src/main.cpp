@@ -145,6 +145,11 @@ static void PrintUsage() {
 	::printf(
 	    "  --trophy-notifications <true|false>   Show trophy unlock toasts and play their sound.\n");
 	::printf("  --playgo-hack                       Use the supplied PlayGo stub fallback.\n");
+	::printf("  --dlss                              Enable NVIDIA DLSS Super Resolution.\n");
+	::printf("  --dlss-mode <mode>                  UltraPerformance, Performance, Balanced, Quality, DLAA.\n");
+	::printf("  --dlss-sharpness <0.0-1.0>          DLSS sharpness. Default: 0.0.\n");
+	::printf("  --dlss-preset <preset>              Default, PresetJ, PresetK, PresetL, PresetM.\n");
+	::printf("  --dlss-diagnostics                  Enable verbose DLSS & Streamline diagnostics.\n");
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	::printf("  --redzone                            Protect the guest SysV red zone.\n");
 #endif
@@ -294,6 +299,16 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 
 		if (arg == "--profile") {
 			options.config.profiler_enabled = true;
+			continue;
+		}
+
+		if (arg == "--dlss") {
+			options.config.dlss_enabled = true;
+			continue;
+		}
+
+		if (arg == "--dlss-diagnostics") {
+			options.config.dlss_diagnostics = true;
 			continue;
 		}
 
@@ -517,6 +532,57 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 				return false;
 			}
 			options.config.keymap.push_back(value);
+		} else if (arg == "--dlss-mode") {
+			if (value == "UltraPerformance" || value == "ultra_performance") {
+				options.config.dlss_mode = 1;
+			} else if (value == "Performance" || value == "performance") {
+				options.config.dlss_mode = 2;
+			} else if (value == "Balanced" || value == "balanced") {
+				options.config.dlss_mode = 3;
+			} else if (value == "Quality" || value == "quality") {
+				options.config.dlss_mode = 4;
+			} else if (value == "DLAA" || value == "dlaa") {
+				options.config.dlss_mode = 5;
+			} else if (value == "Off" || value == "off") {
+				options.config.dlss_mode = 0;
+			} else {
+				uint32_t mode_val = 0;
+				if (ParseUint32(value, mode_val) && mode_val <= 5) {
+					options.config.dlss_mode = mode_val;
+				} else {
+					::printf("invalid dlss mode: %s\n", value.c_str());
+					return false;
+				}
+			}
+		} else if (arg == "--dlss-sharpness") {
+			float sharpness = 0.0f;
+			try {
+				sharpness = std::stof(value);
+			} catch (...) {
+				::printf("invalid dlss sharpness: %s\n", value.c_str());
+				return false;
+			}
+			options.config.dlss_sharpness = std::clamp(sharpness, 0.0f, 1.0f);
+		} else if (arg == "--dlss-preset") {
+			if (value == "PresetJ" || value == "preset_j" || value == "J") {
+				options.config.dlss_preset = 1;
+			} else if (value == "PresetK" || value == "preset_k" || value == "K") {
+				options.config.dlss_preset = 2;
+			} else if (value == "PresetL" || value == "preset_l" || value == "L") {
+				options.config.dlss_preset = 3;
+			} else if (value == "PresetM" || value == "preset_m" || value == "M") {
+				options.config.dlss_preset = 4;
+			} else if (value == "Default" || value == "default") {
+				options.config.dlss_preset = 0;
+			} else {
+				uint32_t preset_val = 0;
+				if (ParseUint32(value, preset_val) && preset_val <= 4) {
+					options.config.dlss_preset = preset_val;
+				} else {
+					::printf("invalid dlss preset: %s\n", value.c_str());
+					return false;
+				}
+			}
 		} else {
 			::printf("unknown option: %s\n", arg.c_str());
 			return false;

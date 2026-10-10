@@ -86,6 +86,11 @@ struct ConfigOptions {
 	bool                   tessellation_enabled        = false;
 	bool                   trophy_enabled              = true;
 	bool                   playgo_hack_enabled         = false;
+	bool                   dlss_enabled                = false;
+	uint32_t               dlss_mode                   = 4;
+	float                  dlss_sharpness              = 0.0f;
+	uint32_t               dlss_preset                 = 0;
+	bool                   dlss_diagnostics            = false;
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	bool red_zone_protection_enabled = false;
 #endif
@@ -93,6 +98,12 @@ struct ConfigOptions {
 };
 
 void Load(const ConfigOptions& cfg);
+
+bool DLSSEnabled();
+uint32_t GetDLSSMode();
+float GetDLSSSharpness();
+uint32_t GetDLSSPreset();
+bool DLSSDiagnosticsEnabled();
 
 uint32_t GetScreenWidth();
 uint32_t GetScreenHeight();

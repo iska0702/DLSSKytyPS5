@@ -2,6 +2,55 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(cpuinfo)
 
+set(KYTY_PREBUILT_DIR "D:/Programs/KytyPS5-U59-Windows-x64")
+if(WIN32 AND EXISTS "${KYTY_PREBUILT_DIR}")
+	add_library(opus STATIC IMPORTED GLOBAL)
+	set_target_properties(opus PROPERTIES
+		IMPORTED_LOCATION "${KYTY_PREBUILT_DIR}/lib/opus.lib"
+		INTERFACE_INCLUDE_DIRECTORIES "${KYTY_PREBUILT_DIR}/include;${KYTY_PREBUILT_DIR}/include/opus"
+	)
+
+	add_library(xbyak::xbyak INTERFACE IMPORTED GLOBAL)
+	set_target_properties(xbyak::xbyak PROPERTIES
+		INTERFACE_INCLUDE_DIRECTORIES "${KYTY_PREBUILT_DIR}/include"
+		INTERFACE_COMPILE_DEFINITIONS "XBYAK_NO_EXCEPTION"
+	)
+	add_library(xbyak ALIAS xbyak::xbyak)
+
+	add_library(Zycore::Zycore STATIC IMPORTED GLOBAL)
+	set_target_properties(Zycore::Zycore PROPERTIES
+		IMPORTED_LOCATION "${KYTY_PREBUILT_DIR}/lib/Zycore.lib"
+		INTERFACE_INCLUDE_DIRECTORIES "${KYTY_PREBUILT_DIR}/include"
+	)
+
+	add_library(Zydis::Zydis STATIC IMPORTED GLOBAL)
+	set_target_properties(Zydis::Zydis PROPERTIES
+		IMPORTED_LOCATION "${KYTY_PREBUILT_DIR}/lib/Zydis.lib"
+		INTERFACE_INCLUDE_DIRECTORIES "${KYTY_PREBUILT_DIR}/include"
+		INTERFACE_COMPILE_DEFINITIONS "ZYDIS_STATIC_BUILD"
+		INTERFACE_LINK_LIBRARIES "Zycore::Zycore"
+	)
+
+	add_library(zstd::libzstd_static STATIC IMPORTED GLOBAL)
+	set_target_properties(zstd::libzstd_static PROPERTIES
+		IMPORTED_LOCATION "${KYTY_PREBUILT_DIR}/lib/zstd_static.lib"
+		INTERFACE_INCLUDE_DIRECTORIES "${KYTY_PREBUILT_DIR}/include"
+	)
+	add_library(libzstd_static ALIAS zstd::libzstd_static)
+
+	set(ZARCHIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/zarchive")
+	add_library(zarchive STATIC
+		"${ZARCHIVE_DIR}/src/zarchivereader.cpp"
+		"${ZARCHIVE_DIR}/src/zarchivewriter.cpp"
+		"${ZARCHIVE_DIR}/src/sha_256.c"
+	)
+	add_library(ZArchive::zarchive ALIAS zarchive)
+	target_include_directories(zarchive SYSTEM PUBLIC "${ZARCHIVE_DIR}/include")
+	target_include_directories(zarchive PRIVATE "${KYTY_PREBUILT_DIR}/include")
+	target_link_libraries(zarchive PRIVATE zstd::libzstd_static)
+	target_compile_features(zarchive PRIVATE cxx_std_20)
+	target_compile_options(zarchive PRIVATE /W0)
+else()
 include(FetchContent)
 
 # The Bluetooth DualSense transports speaker audio as fixed-size Opus packets.
@@ -19,8 +68,8 @@ if(MSVC AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 FetchContent_Declare(opus
 	GIT_REPOSITORY https://github.com/xiph/opus.git
-	GIT_TAG ddbe48383984d56acd9e1ab6a090c54ca6b735a6
-	GIT_SHALLOW FALSE)
+	GIT_TAG spl_fargan
+	GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(opus)
 set(BUILD_TESTING "${kyty_build_testing_saved}")
 install(FILES "${opus_SOURCE_DIR}/COPYING" DESTINATION "licenses/opus")
@@ -32,7 +81,7 @@ FetchContent_Declare(
 	xbyak
 	GIT_REPOSITORY https://github.com/herumi/xbyak.git
 	GIT_TAG 44a72f369268f7d552650891b296693e91db86bb
-	GIT_SHALLOW FALSE
+	GIT_SHALLOW TRUE
 )
 
 set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -44,7 +93,7 @@ FetchContent_Declare(
 	GIT_REPOSITORY https://github.com/zyantific/zydis.git
 	GIT_TAG 120e0e705f8e3b507dc49377ac2879979f0d545c
 	GIT_SUBMODULES_RECURSE TRUE
-	GIT_SHALLOW FALSE
+	GIT_SHALLOW TRUE
 )
 
 FetchContent_MakeAvailable(xbyak zydis)
@@ -63,14 +112,14 @@ FetchContent_Declare(
 	zstd
 	GIT_REPOSITORY https://github.com/facebook/zstd.git
 	GIT_TAG f8745da6ff1ad1e7bab384bd1f9d742439278e99
-	GIT_SHALLOW FALSE
+	GIT_SHALLOW TRUE
 	SOURCE_SUBDIR build/cmake
 )
 FetchContent_Declare(
 	zarchive_source
 	GIT_REPOSITORY https://github.com/Exzap/ZArchive.git
 	GIT_TAG d2c717730092c7bf8cbb033b12fd4001b7c4d932
-	GIT_SHALLOW FALSE
+	GIT_SHALLOW TRUE
 	PATCH_COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace
 		"${CMAKE_CURRENT_SOURCE_DIR}/patches/zarchive-reader.patch"
 	SOURCE_SUBDIR kyty-library-only
@@ -91,6 +140,7 @@ if(MSVC)
 	target_compile_options(zarchive PRIVATE /W0)
 else()
 	target_compile_options(zarchive PRIVATE -w)
+endif()
 endif()
 
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)

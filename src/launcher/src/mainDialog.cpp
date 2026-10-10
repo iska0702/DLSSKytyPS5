@@ -257,6 +257,15 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	if (info.tessellation_enabled) {
 		args << "--tessellation";
 	}
+	if (info.dlss_enabled) {
+		args << "--dlss";
+		args << "--dlss-mode" << EnumToText(info.dlss_mode);
+		args << "--dlss-sharpness" << QString::number(info.dlss_sharpness, 'f', 2);
+		args << "--dlss-preset" << EnumToText(info.dlss_preset);
+		if (info.dlss_diagnostics) {
+			args << "--dlss-diagnostics";
+		}
+	}
 	args << "--vblank-frequency" << QString::number(info.vblank_frequency);
 	args << "--console-language" << QString::number(info.console_language);
 	args << "--vulkan-validation" << BoolArg(info.vulkan_validation_enabled);

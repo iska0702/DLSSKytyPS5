@@ -15,6 +15,7 @@
 #include "graphics/presentation/systemOverlay.h"
 #include "graphics/presentation/videoOut.h"
 #include "graphics/presentation/window/windowInternal.h"
+#include "graphics/presentation/dlss/dlssManager.h"
 
 #include <algorithm>
 #include <array>
@@ -563,6 +564,7 @@ void Swapchain::Destroy() {
 	m_overlay_descriptors = nullptr;
 	m_overlay_sampler     = nullptr;
 	m_filter.Release(graphics.device);
+	DLSSManager::Instance().ReleaseResources(graphics);
 
 	for (const auto semaphore: m_image_acquired) {
 		if (semaphore != nullptr) {
@@ -1004,9 +1006,11 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	const vk::Extent2D source_extent =
 	    source != nullptr ? vk::Extent2D {source->image.extent.width, source->image.extent.height}
 	                      : vk::Extent2D {};
-	const bool filtered = source != nullptr && PresentBoxDownscaleEnabled() &&
-	                      PresentNeedsFilter(source_extent, m_extent);
-	if (filtered) {
+
+	// Evaluate DLSS Super Resolution if enabled
+	VulkanImage* dlss_upscaled_image = nullptr;
+	bool dlss_evaluated = false;
+	if (source != nullptr && (Config::DLSSEnabled() || DLSSManager::Instance().IsActive())) {
 		if (source->view == nullptr) {
 			vk::ImageViewCreateInfo view {};
 			view.image            = source->image.image;
@@ -1019,9 +1023,32 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 		}
 		source->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
 		                vk::AccessFlagBits2::eShaderRead);
-	} else if (source != nullptr) {
-		source->Transit(vk_command, vk::ImageLayout::eTransferSrcOptimal,
-		                vk::AccessFlagBits2::eTransferRead);
+		dlss_evaluated = DLSSManager::Instance().Evaluate(m_window.graphic_ctx, vk_command,
+		                                                  source->image, source->view,
+		                                                  source_extent, m_extent,
+		                                                  dlss_upscaled_image);
+	}
+
+	const bool filtered = !dlss_evaluated && source != nullptr && PresentBoxDownscaleEnabled() &&
+	                      PresentNeedsFilter(source_extent, m_extent);
+	if (!dlss_evaluated) {
+		if (filtered) {
+			if (source->view == nullptr) {
+				vk::ImageViewCreateInfo view {};
+				view.image            = source->image.image;
+				view.viewType         = vk::ImageViewType::e2D;
+				view.format           = source->image.format;
+				view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+				RequireVulkanSuccess(
+				    m_window.graphic_ctx.device.createImageView(&view, nullptr, &source->view),
+				    "create presentation source view");
+			}
+			source->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
+			                vk::AccessFlagBits2::eShaderRead);
+		} else if (source != nullptr) {
+			source->Transit(vk_command, vk::ImageLayout::eTransferSrcOptimal,
+			                vk::AccessFlagBits2::eTransferRead);
+		}
 	}
 	if (draw_overlay) {
 		overlay.frame->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -1049,7 +1076,26 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, write_stage,
 	                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_transfer);
 
-	if (filtered) {
+	if (dlss_evaluated && dlss_upscaled_image != nullptr) {
+		vk::ImageBlit region {};
+		region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+		region.srcSubresource.mipLevel       = 0;
+		region.srcSubresource.baseArrayLayer = 0;
+		region.srcSubresource.layerCount     = 1;
+		region.srcOffsets[1].x               = static_cast<int>(m_extent.width);
+		region.srcOffsets[1].y               = static_cast<int>(m_extent.height);
+		region.srcOffsets[1].z               = 1;
+		region.dstSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+		region.dstSubresource.mipLevel       = 0;
+		region.dstSubresource.baseArrayLayer = 0;
+		region.dstSubresource.layerCount     = 1;
+		region.dstOffsets[1].x               = static_cast<int>(m_extent.width);
+		region.dstOffsets[1].y               = static_cast<int>(m_extent.height);
+		region.dstOffsets[1].z               = 1;
+		vk_command.blitImage(dlss_upscaled_image->image, vk::ImageLayout::eTransferSrcOptimal,
+		                     m_images[m_image_index], vk::ImageLayout::eTransferDstOptimal, 1,
+		                     &region, vk::Filter::eLinear);
+	} else if (filtered) {
 		m_filter.Record(m_window.graphic_ctx.device, vk_command, source->view, 0, source_extent,
 		                m_image_views[m_image_index], m_format, m_extent);
 	} else if (source != nullptr) {

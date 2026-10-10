@@ -303,6 +303,137 @@ To use your own sound, replace the emulator's assets/sounds/trophy-unlock.wav wi
        </layout>
       </widget>
      </item>
+     <item row="3" column="1">
+      <widget class="QGroupBox" name="dlss_group">
+       <property name="title">
+        <string>NVIDIA DLSS</string>
+       </property>
+       <layout class="QFormLayout" name="dlssLayout">
+        <property name="fieldGrowthPolicy">
+         <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+        </property>
+        <item row="0" column="0" colspan="2">
+         <widget class="QCheckBox" name="checkBox_dlss_enable">
+          <property name="toolTip">
+           <string>Enable NVIDIA DLSS Super Resolution upscaling</string>
+          </property>
+          <property name="text">
+           <string>Enable DLSS</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="label_dlss_status_title">
+          <property name="text">
+           <string>Status:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QLabel" name="label_dlss_status">
+          <property name="text">
+           <string>DLSS Disabled</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="0">
+         <widget class="QLabel" name="label_dlss_mode">
+          <property name="text">
+           <string>Quality Mode:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="QComboBox" name="comboBox_dlss_mode">
+          <property name="toolTip">
+           <string>DLSS Super Resolution quality mode</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0" colspan="2">
+         <widget class="QLabel" name="label_dlss_mode_desc">
+          <property name="text">
+           <string>Scale: 1.5x (67% per axis) — High visual fidelity</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="0" colspan="2">
+         <widget class="QLabel" name="label_dlss_render_res">
+          <property name="text">
+           <string>Render: 854x480 → Output: 1280x720</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="0">
+         <widget class="QLabel" name="label_dlss_sharpness">
+          <property name="text">
+           <string>Sharpness:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="1">
+         <layout class="QHBoxLayout" name="dlss_sharpness_layout">
+          <item>
+           <widget class="QSlider" name="slider_dlss_sharpness">
+            <property name="toolTip">
+             <string>DLSS sharpening intensity (0.00 - 1.00)</string>
+            </property>
+            <property name="maximum">
+             <number>100</number>
+            </property>
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_dlss_sharpness_value">
+            <property name="minimumSize">
+             <size>
+              <width>40</width>
+              <height>0</height>
+             </size>
+            </property>
+            <property name="text">
+             <string>0.00</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item row="6" column="0">
+         <widget class="QLabel" name="label_dlss_preset">
+          <property name="text">
+           <string>Preset:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="6" column="1">
+         <widget class="QComboBox" name="comboBox_dlss_preset">
+          <property name="toolTip">
+           <string>NVIDIA DLSS neural network model preset</string>
+          </property>
+         </widget>
+        </item>
+        <item row="7" column="0" colspan="2">
+         <widget class="QCheckBox" name="checkBox_dlss_diagnostics">
+          <property name="toolTip">
+           <string>Enable verbose DLSS &amp; Streamline log messages</string>
+          </property>
+          <property name="text">
+           <string>Enable DLSS Diagnostics</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </item>
      <item row="4" column="0" colspan="2">
       <widget class="QGroupBox" name="debug_group">
        <property name="title">

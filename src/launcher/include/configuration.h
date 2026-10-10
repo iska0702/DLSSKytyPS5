@@ -125,6 +125,25 @@ public:
 	enum class GameStatus { Unknown, InGame, Logo, DoesntBoot, MainMenu };
 	Q_ENUM(GameStatus)
 
+	enum class DLSSMode {
+		Off,
+		UltraPerformance,
+		Performance,
+		Balanced,
+		Quality,
+		DLAA,
+	};
+	Q_ENUM(DLSSMode)
+
+	enum class DLSSPreset {
+		Default,
+		PresetJ,
+		PresetK,
+		PresetL,
+		PresetM,
+	};
+	Q_ENUM(DLSSPreset)
+
 	Configuration() = default;
 
 	QString    name;
@@ -189,6 +208,12 @@ public:
 #endif
 	QStringList host_input_mapping;
 
+	bool       dlss_enabled     = false;
+	DLSSMode   dlss_mode        = DLSSMode::Quality;
+	float      dlss_sharpness   = 0.0f;
+	DLSSPreset dlss_preset      = DLSSPreset::Default;
+	bool       dlss_diagnostics = false;
+
 	QString elf = QStringLiteral("eboot.bin");
 
 	void CopyEmulatorSettingsFrom(const Configuration& other) {
@@ -221,6 +246,11 @@ public:
 		red_zone_protection_enabled = other.red_zone_protection_enabled;
 #endif
 		host_input_mapping = other.host_input_mapping;
+		dlss_enabled       = other.dlss_enabled;
+		dlss_mode          = other.dlss_mode;
+		dlss_sharpness     = other.dlss_sharpness;
+		dlss_preset        = other.dlss_preset;
+		dlss_diagnostics   = other.dlss_diagnostics;
 	}
 
 	void CopyGameInfoFrom(const Configuration& other) {
@@ -269,6 +299,11 @@ public:
 		KYTY_CFG_SET(red_zone_protection_enabled);
 #endif
 		s->setValue("host_input_mapping", host_input_mapping);
+		KYTY_CFG_SET(dlss_enabled);
+		KYTY_CFG_SET(dlss_mode);
+		s->setValue("dlss_sharpness", static_cast<double>(dlss_sharpness));
+		KYTY_CFG_SET(dlss_preset);
+		KYTY_CFG_SET(dlss_diagnostics);
 		KYTY_CFG_SET(elf);
 	}
 
@@ -317,7 +352,18 @@ public:
 		    s->value("red_zone_protection_enabled", red_zone_protection_enabled).toBool();
 #endif
 		host_input_mapping = s->value("host_input_mapping", host_input_mapping).toStringList();
-		elf                = s->value("elf", elf).toString();
+		dlss_enabled       = s->value("dlss_enabled", dlss_enabled).toBool();
+		KYTY_CFG_GET(dlss_mode);
+		if (EnumToText(dlss_mode).isEmpty()) {
+			dlss_mode = DLSSMode::Quality;
+		}
+		dlss_sharpness = s->value("dlss_sharpness", dlss_sharpness).toFloat();
+		KYTY_CFG_GET(dlss_preset);
+		if (EnumToText(dlss_preset).isEmpty()) {
+			dlss_preset = DLSSPreset::Default;
+		}
+		dlss_diagnostics = s->value("dlss_diagnostics", dlss_diagnostics).toBool();
+		elf              = s->value("elf", elf).toString();
 	}
 };
 

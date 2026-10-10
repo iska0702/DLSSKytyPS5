@@ -1,0 +1,638 @@
+#include "graphics/presentation/dlss/dlssManager.h"
+#include "common/logging/log.h"
+#include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/vulkanCommon.h"
+
+#include <sl.h>
+#include <sl_consts.h>
+#include <sl_dlss.h>
+#include <sl_helpers_vk.h>
+
+#include <algorithm>
+#include <filesystem>
+#include <windows.h>
+
+namespace Libs::Graphics {
+
+static void StreamlineLogCallback(sl::LogType type, const char* msg) {
+	if (msg == nullptr) {
+		return;
+	}
+	switch (type) {
+		case sl::LogType::eError:
+			LOGF("[Streamline/DLSS][Error] %s\n", msg);
+			break;
+		case sl::LogType::eWarn:
+			LOGF("[Streamline/DLSS][Warn] %s\n", msg);
+			break;
+		case sl::LogType::eInfo:
+		default:
+			LOGF("[Streamline/DLSS][Info] %s\n", msg);
+			break;
+	}
+}
+
+static sl::DLSSMode ConvertDLSSMode(DLSSMode mode) noexcept {
+	switch (mode) {
+		case DLSSMode::UltraPerformance: return sl::DLSSMode::eUltraPerformance;
+		case DLSSMode::Performance: return sl::DLSSMode::eMaxPerformance;
+		case DLSSMode::Balanced: return sl::DLSSMode::eBalanced;
+		case DLSSMode::Quality: return sl::DLSSMode::eMaxQuality;
+		case DLSSMode::DLAA: return sl::DLSSMode::eDLAA;
+		case DLSSMode::Off:
+		default: return sl::DLSSMode::eOff;
+	}
+}
+
+static sl::DLSSPreset ConvertDLSSPreset(DLSSPreset preset) noexcept {
+	switch (preset) {
+		case DLSSPreset::PresetJ: return sl::DLSSPreset::ePresetJ;
+		case DLSSPreset::PresetK: return sl::DLSSPreset::ePresetK;
+		case DLSSPreset::PresetL: return sl::DLSSPreset::ePresetL;
+		case DLSSPreset::PresetM: return sl::DLSSPreset::ePresetM;
+		case DLSSPreset::Default:
+		default: return sl::DLSSPreset::eDefault;
+	}
+}
+
+static VkDeviceMemory GetImageMemory(GraphicContext& graphics, VmaAllocation allocation) {
+	if (graphics.allocator == nullptr || allocation == nullptr) {
+		return VK_NULL_HANDLE;
+	}
+	VmaAllocationInfo alloc_info {};
+	vmaGetAllocationInfo(graphics.allocator, allocation, &alloc_info);
+	return alloc_info.deviceMemory;
+}
+
+DLSSManager& DLSSManager::Instance() {
+	static DLSSManager s_instance;
+	return s_instance;
+}
+
+DLSSManager::DLSSManager() = default;
+
+DLSSManager::~DLSSManager() = default;
+
+void DLSSManager::UpdateSettings(const DLSSSettings& settings) {
+	m_settings = settings;
+	if (!m_settings.enabled) {
+		m_status = DLSSStatus::Disabled;
+		m_status_message = "DLSS Disabled in configuration";
+	} else if (m_available) {
+		m_status = DLSSStatus::Available;
+		m_status_message = "DLSS Available and ready";
+	}
+}
+
+bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
+	if (m_streamline_loaded) {
+		return true;
+	}
+
+	m_status = DLSSStatus::Initializing;
+	m_status_message = "Initializing NVIDIA Streamline...";
+
+	sl::Preferences pref {};
+	pref.showConsole = false;
+	pref.logLevel = m_settings.diagnostics ? sl::LogLevel::eVerbose : sl::LogLevel::eDefault;
+	pref.logMessageCallback = StreamlineLogCallback;
+
+	wchar_t module_path[MAX_PATH] = {};
+	GetModuleFileNameW(nullptr, module_path, MAX_PATH);
+	std::filesystem::path bin_dir = std::filesystem::path(module_path).parent_path();
+	std::wstring bin_dir_w = bin_dir.wstring();
+	const wchar_t* plugin_paths[] = { bin_dir_w.c_str() };
+	pref.pathsToPlugins = plugin_paths;
+	pref.numPathsToPlugins = 1;
+
+	pref.flags = sl::PreferenceFlags::eDisableCLStateTracking |
+	             sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+	sl::Feature features[] = { sl::kFeatureDLSS };
+	pref.featuresToLoad = features;
+	pref.numFeaturesToLoad = 1;
+	pref.renderAPI = sl::RenderAPI::eVulkan;
+	pref.applicationId = 0x505335; // 'PS5' custom application ID
+	pref.engine = sl::EngineType::eCustom;
+	pref.engineVersion = "1.0.0";
+
+	sl::Result res = slInit(pref, sl::kSDKVersion);
+	if (res != sl::Result::eOk) {
+		m_status = DLSSStatus::Error;
+		m_status_message = fmt::format("Streamline slInit failed: code {}", static_cast<int>(res));
+		LOGF("[DLSS] %s\n", m_status_message.c_str());
+		return false;
+	}
+
+	sl::VulkanInfo vk_info {};
+	vk_info.device = static_cast<VkDevice>(graphics.device);
+	vk_info.instance = static_cast<VkInstance>(graphics.instance);
+	vk_info.physicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
+	vk_info.graphicsQueueFamily = graphics.queue_family;
+	vk_info.graphicsQueueIndex = 0;
+	vk_info.computeQueueFamily = graphics.queue_family;
+	vk_info.computeQueueIndex = graphics.side_queue_index != 0 ? graphics.side_queue_index : 0;
+
+	res = slSetVulkanInfo(vk_info);
+	if (res != sl::Result::eOk) {
+		m_status = DLSSStatus::Error;
+		m_status_message = fmt::format("Streamline slSetVulkanInfo failed: code {}", static_cast<int>(res));
+		LOGF("[DLSS] %s\n", m_status_message.c_str());
+		slShutdown();
+		return false;
+	}
+
+	sl::AdapterInfo adapter_info {};
+	adapter_info.vkPhysicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
+	res = slIsFeatureSupported(sl::kFeatureDLSS, adapter_info);
+	if (res != sl::Result::eOk) {
+		m_status = DLSSStatus::Unsupported;
+		m_status_message = "NVIDIA DLSS is unsupported on current GPU (RTX series required)";
+		LOGF("[DLSS] %s (result %d)\n", m_status_message.c_str(), static_cast<int>(res));
+		m_available = false;
+		return false;
+	}
+
+	m_streamline_loaded = true;
+	m_available = true;
+	m_status = DLSSStatus::Available;
+	m_status_message = "NVIDIA DLSS Initialized and Available";
+	LOGF("[DLSS] Streamline and DLSS initialized successfully on GPU: %s\n",
+	     graphics.GetPhysicalDeviceProperties().deviceName.data());
+	return true;
+}
+
+bool DLSSManager::Initialize(GraphicContext& graphics, const DLSSSettings& settings) {
+	m_settings = settings;
+
+	if (!SetupStreamline(graphics)) {
+		return false;
+	}
+
+	m_initialized = true;
+	if (m_settings.enabled) {
+		m_status = DLSSStatus::Available;
+		m_status_message = "DLSS Enabled & Available";
+	} else {
+		m_status = DLSSStatus::Disabled;
+		m_status_message = "DLSS Disabled in configuration";
+	}
+
+	return true;
+}
+
+void DLSSManager::CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D extent) {
+	DestroyFallbackBuffers(graphics);
+
+	// Fallback Depth: D32_SFLOAT, cleared to neutral 1.0f
+	vk::ImageCreateInfo depth_info {};
+	depth_info.sType         = vk::StructureType::eImageCreateInfo;
+	depth_info.imageType     = vk::ImageType::e2D;
+	depth_info.extent        = { extent.width, extent.height, 1 };
+	depth_info.mipLevels     = 1;
+	depth_info.arrayLayers   = 1;
+	depth_info.format        = vk::Format::eD32Sfloat;
+	depth_info.tiling        = vk::ImageTiling::eOptimal;
+	depth_info.initialLayout = vk::ImageLayout::eUndefined;
+	depth_info.usage         = vk::ImageUsageFlagBits::eDepthStencilAttachment |
+	                           vk::ImageUsageFlagBits::eSampled |
+	                           vk::ImageUsageFlagBits::eTransferDst;
+	depth_info.sharingMode   = vk::SharingMode::eExclusive;
+	depth_info.samples       = vk::SampleCountFlagBits::e1;
+
+	if (graphics.CreateImage(depth_info, m_fallback_depth_image)) {
+		vk::ImageViewCreateInfo view_info {};
+		view_info.sType            = vk::StructureType::eImageViewCreateInfo;
+		view_info.image            = m_fallback_depth_image.image;
+		view_info.viewType         = vk::ImageViewType::e2D;
+		view_info.format           = m_fallback_depth_image.format;
+		view_info.subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1 };
+		if (graphics.device.createImageView(&view_info, nullptr, &m_fallback_depth_view) == vk::Result::eSuccess) {
+			m_depth_extent = extent;
+			m_depth_initialized = false;
+		}
+	}
+
+	// Fallback Motion Vectors: R16G16_SFLOAT, cleared to neutral {0.0f, 0.0f}
+	vk::ImageCreateInfo mvec_info {};
+	mvec_info.sType         = vk::StructureType::eImageCreateInfo;
+	mvec_info.imageType     = vk::ImageType::e2D;
+	mvec_info.extent        = { extent.width, extent.height, 1 };
+	mvec_info.mipLevels     = 1;
+	mvec_info.arrayLayers   = 1;
+	mvec_info.format        = vk::Format::eR16G16Sfloat;
+	mvec_info.tiling        = vk::ImageTiling::eOptimal;
+	mvec_info.initialLayout = vk::ImageLayout::eUndefined;
+	mvec_info.usage         = vk::ImageUsageFlagBits::eStorage |
+	                          vk::ImageUsageFlagBits::eColorAttachment |
+	                          vk::ImageUsageFlagBits::eSampled |
+	                          vk::ImageUsageFlagBits::eTransferDst;
+	mvec_info.sharingMode   = vk::SharingMode::eExclusive;
+	mvec_info.samples       = vk::SampleCountFlagBits::e1;
+
+	if (graphics.CreateImage(mvec_info, m_fallback_mvec_image)) {
+		vk::ImageViewCreateInfo view_info {};
+		view_info.sType            = vk::StructureType::eImageViewCreateInfo;
+		view_info.image            = m_fallback_mvec_image.image;
+		view_info.viewType         = vk::ImageViewType::e2D;
+		view_info.format           = m_fallback_mvec_image.format;
+		view_info.subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+		if (graphics.device.createImageView(&view_info, nullptr, &m_fallback_mvec_view) == vk::Result::eSuccess) {
+			m_mvec_extent = extent;
+			m_mvec_initialized = false;
+		}
+	}
+}
+
+void DLSSManager::DestroyFallbackBuffers(GraphicContext& graphics) {
+	if (m_fallback_depth_view != nullptr) {
+		graphics.device.destroyImageView(m_fallback_depth_view, nullptr);
+		m_fallback_depth_view = nullptr;
+	}
+	if (m_fallback_depth_image.image != nullptr) {
+		graphics.DeleteImage(m_fallback_depth_image);
+	}
+	m_depth_extent = {};
+	m_depth_initialized = false;
+
+	if (m_fallback_mvec_view != nullptr) {
+		graphics.device.destroyImageView(m_fallback_mvec_view, nullptr);
+		m_fallback_mvec_view = nullptr;
+	}
+	if (m_fallback_mvec_image.image != nullptr) {
+		graphics.DeleteImage(m_fallback_mvec_image);
+	}
+	m_mvec_extent = {};
+	m_mvec_initialized = false;
+}
+
+bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_extent,
+                                   vk::Extent2D target_extent) {
+	if (m_output_image.image != nullptr && m_output_extent.width == target_extent.width &&
+	    m_output_extent.height == target_extent.height &&
+	    m_depth_extent.width == input_extent.width && m_depth_extent.height == input_extent.height) {
+		return true;
+	}
+
+	ReleaseResources(graphics);
+
+	// Output buffer: RGBA8_UNORM at presentation target resolution
+	vk::ImageCreateInfo out_info {};
+	out_info.sType         = vk::StructureType::eImageCreateInfo;
+	out_info.imageType     = vk::ImageType::e2D;
+	out_info.extent        = { target_extent.width, target_extent.height, 1 };
+	out_info.mipLevels     = 1;
+	out_info.arrayLayers   = 1;
+	out_info.format        = vk::Format::eR8G8B8A8Unorm;
+	out_info.tiling        = vk::ImageTiling::eOptimal;
+	out_info.initialLayout = vk::ImageLayout::eUndefined;
+	out_info.usage         = vk::ImageUsageFlagBits::eStorage |
+	                         vk::ImageUsageFlagBits::eColorAttachment |
+	                         vk::ImageUsageFlagBits::eTransferSrc |
+	                         vk::ImageUsageFlagBits::eSampled;
+	out_info.sharingMode   = vk::SharingMode::eExclusive;
+	out_info.samples       = vk::SampleCountFlagBits::e1;
+
+	if (!graphics.CreateImage(out_info, m_output_image)) {
+		m_status = DLSSStatus::Error;
+		m_status_message = "Failed to create DLSS output image";
+		LOGF("[DLSS] %s\n", m_status_message.c_str());
+		return false;
+	}
+
+	vk::ImageViewCreateInfo view_info {};
+	view_info.sType            = vk::StructureType::eImageViewCreateInfo;
+	view_info.image            = m_output_image.image;
+	view_info.viewType         = vk::ImageViewType::e2D;
+	view_info.format           = m_output_image.format;
+	view_info.subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+	if (graphics.device.createImageView(&view_info, nullptr, &m_output_view) != vk::Result::eSuccess) {
+		m_status = DLSSStatus::Error;
+		m_status_message = "Failed to create DLSS output image view";
+		LOGF("[DLSS] %s\n", m_status_message.c_str());
+		graphics.DeleteImage(m_output_image);
+		return false;
+	}
+	m_output_extent = target_extent;
+
+	CreateFallbackBuffers(graphics, input_extent);
+
+	// Set DLSS Options in Streamline
+	sl::ViewportHandle viewport(m_viewport_id);
+	sl::DLSSOptions dlss_options {};
+	dlss_options.mode = ConvertDLSSMode(m_settings.mode);
+	dlss_options.outputWidth = target_extent.width;
+	dlss_options.outputHeight = target_extent.height;
+	dlss_options.sharpness = m_settings.sharpness;
+	dlss_options.colorBuffersHDR = sl::Boolean::eFalse;
+	dlss_options.qualityPreset = ConvertDLSSPreset(m_settings.preset);
+	dlss_options.performancePreset = ConvertDLSSPreset(m_settings.preset);
+	dlss_options.balancedPreset = ConvertDLSSPreset(m_settings.preset);
+	dlss_options.ultraPerformancePreset = ConvertDLSSPreset(m_settings.preset);
+	dlss_options.dlaaPreset = ConvertDLSSPreset(m_settings.preset);
+
+	sl::Result res = slDLSSSetOptions(viewport, dlss_options);
+	if (res != sl::Result::eOk) {
+		LOGF("[DLSS] slDLSSSetOptions returned %d\n", static_cast<int>(res));
+	}
+
+	if (m_settings.diagnostics) {
+		sl::DLSSOptimalSettings opt {};
+		if (slDLSSGetOptimalSettings(dlss_options, opt) == sl::Result::eOk) {
+			LOGF("[DLSS][Diag] Mode: %s, Target: %ux%u, Optimal Render: %ux%u (Min: %ux%u, Max: %ux%u)\n",
+			     DLSSModeToString(m_settings.mode), target_extent.width, target_extent.height,
+			     opt.optimalRenderWidth, opt.optimalRenderHeight, opt.renderWidthMin, opt.renderHeightMin,
+			     opt.renderWidthMax, opt.renderHeightMax);
+		}
+	}
+
+	return true;
+}
+
+bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffer,
+                           VulkanImage& source_image, vk::ImageView source_view,
+                           vk::Extent2D source_extent, vk::Extent2D target_extent,
+                           VulkanImage*& out_upscaled_image) {
+	out_upscaled_image = nullptr;
+
+	if (!m_settings.enabled || m_settings.mode == DLSSMode::Off || !m_available || !m_streamline_loaded) {
+		return false;
+	}
+
+	if (!PrepareResources(graphics, source_extent, target_extent)) {
+		return false;
+	}
+
+	const bool extent_changed = (source_extent.width != m_prev_input_extent.width ||
+	                             source_extent.height != m_prev_input_extent.height ||
+	                             target_extent.width != m_prev_target_extent.width ||
+	                             target_extent.height != m_prev_target_extent.height);
+	m_prev_input_extent = source_extent;
+	m_prev_target_extent = target_extent;
+
+	// Clear fallback depth buffer on initial run or resolution change
+	if (!m_depth_initialized || extent_changed) {
+		vk::ImageSubresourceRange depth_range { vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1 };
+		vk::ImageMemoryBarrier to_clear {};
+		to_clear.sType               = vk::StructureType::eImageMemoryBarrier;
+		to_clear.oldLayout           = vk::ImageLayout::eUndefined;
+		to_clear.newLayout           = vk::ImageLayout::eTransferDstOptimal;
+		to_clear.srcAccessMask       = vk::AccessFlagBits {};
+		to_clear.dstAccessMask       = vk::AccessFlagBits::eTransferWrite;
+		to_clear.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_clear.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_clear.image               = m_fallback_depth_image.image;
+		to_clear.subresourceRange    = depth_range;
+		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+		                           vk::PipelineStageFlagBits::eTransfer,
+		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_clear);
+
+		const vk::ClearDepthStencilValue clear_depth { 1.0f, 0 };
+		cmd_buffer.clearDepthStencilImage(m_fallback_depth_image.image,
+		                                  vk::ImageLayout::eTransferDstOptimal,
+		                                  &clear_depth, 1, &depth_range);
+
+		vk::ImageMemoryBarrier to_shader {};
+		to_shader.sType               = vk::StructureType::eImageMemoryBarrier;
+		to_shader.oldLayout           = vk::ImageLayout::eTransferDstOptimal;
+		to_shader.newLayout           = vk::ImageLayout::eShaderReadOnlyOptimal;
+		to_shader.srcAccessMask       = vk::AccessFlagBits::eTransferWrite;
+		to_shader.dstAccessMask       = vk::AccessFlagBits::eShaderRead;
+		to_shader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_shader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_shader.image               = m_fallback_depth_image.image;
+		to_shader.subresourceRange    = depth_range;
+		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		                           vk::PipelineStageFlagBits::eAllCommands,
+		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_shader);
+		m_depth_initialized = true;
+	}
+
+	// Clear fallback motion vectors buffer on initial run or resolution change
+	if (!m_mvec_initialized || extent_changed) {
+		vk::ImageSubresourceRange mvec_range { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+		vk::ImageMemoryBarrier to_clear {};
+		to_clear.sType               = vk::StructureType::eImageMemoryBarrier;
+		to_clear.oldLayout           = vk::ImageLayout::eUndefined;
+		to_clear.newLayout           = vk::ImageLayout::eTransferDstOptimal;
+		to_clear.srcAccessMask       = vk::AccessFlagBits {};
+		to_clear.dstAccessMask       = vk::AccessFlagBits::eTransferWrite;
+		to_clear.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_clear.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_clear.image               = m_fallback_mvec_image.image;
+		to_clear.subresourceRange    = mvec_range;
+		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+		                           vk::PipelineStageFlagBits::eTransfer,
+		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_clear);
+
+		const vk::ClearColorValue clear_zero {};
+		cmd_buffer.clearColorImage(m_fallback_mvec_image.image,
+		                           vk::ImageLayout::eTransferDstOptimal,
+		                           &clear_zero, 1, &mvec_range);
+
+		vk::ImageMemoryBarrier to_shader {};
+		to_shader.sType               = vk::StructureType::eImageMemoryBarrier;
+		to_shader.oldLayout           = vk::ImageLayout::eTransferDstOptimal;
+		to_shader.newLayout           = vk::ImageLayout::eShaderReadOnlyOptimal;
+		to_shader.srcAccessMask       = vk::AccessFlagBits::eTransferWrite;
+		to_shader.dstAccessMask       = vk::AccessFlagBits::eShaderRead;
+		to_shader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_shader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_shader.image               = m_fallback_mvec_image.image;
+		to_shader.subresourceRange    = mvec_range;
+		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		                           vk::PipelineStageFlagBits::eAllCommands,
+		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_shader);
+		m_mvec_initialized = true;
+	}
+
+	// Transition output image to eGeneral for DLSS evaluation
+	{
+		vk::ImageMemoryBarrier to_general {};
+		to_general.sType               = vk::StructureType::eImageMemoryBarrier;
+		to_general.oldLayout           = vk::ImageLayout::eUndefined;
+		to_general.newLayout           = vk::ImageLayout::eGeneral;
+		to_general.srcAccessMask       = vk::AccessFlagBits {};
+		to_general.dstAccessMask       = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead;
+		to_general.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_general.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_general.image               = m_output_image.image;
+		to_general.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+		                           vk::PipelineStageFlagBits::eAllCommands,
+		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_general);
+	}
+
+	// Build Streamline Native Resources
+	VkDeviceMemory src_mem = GetImageMemory(graphics, source_image.allocation);
+	VkDeviceMemory dst_mem = GetImageMemory(graphics, m_output_image.allocation);
+	VkDeviceMemory depth_mem = GetImageMemory(graphics, m_fallback_depth_image.allocation);
+	VkDeviceMemory mvec_mem = GetImageMemory(graphics, m_fallback_mvec_image.allocation);
+
+	sl::Resource in_color_res(sl::ResourceType::eTex2d,
+	                          static_cast<void*>(static_cast<VkImage>(source_image.image)),
+	                          src_mem,
+	                          static_cast<void*>(static_cast<VkImageView>(source_view)),
+	                          static_cast<uint32_t>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+	in_color_res.width = source_extent.width;
+	in_color_res.height = source_extent.height;
+	in_color_res.nativeFormat = static_cast<uint32_t>(source_image.format);
+	in_color_res.mipLevels = 1;
+	in_color_res.arrayLayers = 1;
+	in_color_res.usage = static_cast<uint32_t>(source_image.usage);
+
+	sl::Resource out_color_res(sl::ResourceType::eTex2d,
+	                           static_cast<void*>(static_cast<VkImage>(m_output_image.image)),
+	                           dst_mem,
+	                           static_cast<void*>(static_cast<VkImageView>(m_output_view)),
+	                           static_cast<uint32_t>(VK_IMAGE_LAYOUT_GENERAL));
+	out_color_res.width = target_extent.width;
+	out_color_res.height = target_extent.height;
+	out_color_res.nativeFormat = static_cast<uint32_t>(m_output_image.format);
+	out_color_res.mipLevels = 1;
+	out_color_res.arrayLayers = 1;
+	out_color_res.usage = static_cast<uint32_t>(m_output_image.usage);
+
+	sl::Resource depth_res(sl::ResourceType::eTex2d,
+	                       static_cast<void*>(static_cast<VkImage>(m_fallback_depth_image.image)),
+	                       depth_mem,
+	                       static_cast<void*>(static_cast<VkImageView>(m_fallback_depth_view)),
+	                       static_cast<uint32_t>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+	depth_res.width = source_extent.width;
+	depth_res.height = source_extent.height;
+	depth_res.nativeFormat = static_cast<uint32_t>(m_fallback_depth_image.format);
+	depth_res.mipLevels = 1;
+	depth_res.arrayLayers = 1;
+	depth_res.usage = static_cast<uint32_t>(m_fallback_depth_image.usage);
+
+	sl::Resource mvec_res(sl::ResourceType::eTex2d,
+	                      static_cast<void*>(static_cast<VkImage>(m_fallback_mvec_image.image)),
+	                      mvec_mem,
+	                      static_cast<void*>(static_cast<VkImageView>(m_fallback_mvec_view)),
+	                      static_cast<uint32_t>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+	mvec_res.width = source_extent.width;
+	mvec_res.height = source_extent.height;
+	mvec_res.nativeFormat = static_cast<uint32_t>(m_fallback_mvec_image.format);
+	mvec_res.mipLevels = 1;
+	mvec_res.arrayLayers = 1;
+	mvec_res.usage = static_cast<uint32_t>(m_fallback_mvec_image.usage);
+
+	sl::ResourceTag tags[4] = {
+		sl::ResourceTag(&in_color_res, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate),
+		sl::ResourceTag(&out_color_res, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate),
+		sl::ResourceTag(&depth_res, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate),
+		sl::ResourceTag(&mvec_res, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate),
+	};
+
+	sl::ViewportHandle viewport(m_viewport_id);
+	sl::FrameToken* frame_token = nullptr;
+	uint32_t frame_index = m_frame_counter++;
+	sl::Result res = slGetNewFrameToken(frame_token, &frame_index);
+	if (res != sl::Result::eOk || frame_token == nullptr) {
+		LOGF("[DLSS] slGetNewFrameToken failed: %d\n", static_cast<int>(res));
+		return false;
+	}
+
+	res = slSetTagForFrame(*frame_token, viewport, tags, 4, static_cast<sl::CommandBuffer*>(cmd_buffer));
+	if (res != sl::Result::eOk) {
+		LOGF("[DLSS] slSetTagForFrame failed: %d\n", static_cast<int>(res));
+		return false;
+	}
+
+	sl::Constants constants {};
+	constants.jitterOffset = { 0.0f, 0.0f };
+	constants.mvecScale    = { 1.0f, 1.0f };
+	constants.reset        = (m_frame_counter <= 2 || extent_changed) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+	constants.cameraMotionIncluded = sl::Boolean::eTrue;
+	constants.motionVectors3D      = sl::Boolean::eFalse;
+	constants.depthInverted        = sl::Boolean::eFalse;
+	constants.orthographicProjection = sl::Boolean::eFalse;
+	constants.motionVectorsDilated   = sl::Boolean::eFalse;
+	constants.motionVectorsJittered  = sl::Boolean::eFalse;
+
+	sl::float4x4 identity {};
+	identity[0] = sl::float4 { 1.0f, 0.0f, 0.0f, 0.0f };
+	identity[1] = sl::float4 { 0.0f, 1.0f, 0.0f, 0.0f };
+	identity[2] = sl::float4 { 0.0f, 0.0f, 1.0f, 0.0f };
+	identity[3] = sl::float4 { 0.0f, 0.0f, 0.0f, 1.0f };
+
+	constants.cameraViewToClip = identity;
+	constants.clipToCameraView = identity;
+	constants.clipToPrevClip   = identity;
+	constants.prevClipToClip   = identity;
+	constants.cameraNear = 0.1f;
+	constants.cameraFar  = 1000.0f;
+	constants.cameraFOV  = 1.0f;
+	constants.cameraAspectRatio = static_cast<float>(target_extent.width) / static_cast<float>(target_extent.height);
+
+	res = slSetConstants(constants, *frame_token, viewport);
+	if (res != sl::Result::eOk) {
+		LOGF("[DLSS] slSetConstants failed: %d\n", static_cast<int>(res));
+		return false;
+	}
+
+	// Evaluate Feature
+	const sl::BaseStructure* inputs[] = { &viewport };
+	res = slEvaluateFeature(sl::kFeatureDLSS, *frame_token, inputs, 1, static_cast<sl::CommandBuffer*>(cmd_buffer));
+	if (res != sl::Result::eOk) {
+		m_status = DLSSStatus::Error;
+		m_status_message = fmt::format("slEvaluateFeature failed: {}", static_cast<int>(res));
+		LOGF("[DLSS] %s\n", m_status_message.c_str());
+		return false;
+	}
+
+	// Transition output image to eTransferSrcOptimal so swapchain blit/copy can read it
+	{
+		vk::ImageMemoryBarrier to_src {};
+		to_src.sType               = vk::StructureType::eImageMemoryBarrier;
+		to_src.oldLayout           = vk::ImageLayout::eGeneral;
+		to_src.newLayout           = vk::ImageLayout::eTransferSrcOptimal;
+		to_src.srcAccessMask       = vk::AccessFlagBits::eShaderWrite;
+		to_src.dstAccessMask       = vk::AccessFlagBits::eTransferRead;
+		to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_src.image               = m_output_image.image;
+		to_src.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+		                           vk::PipelineStageFlagBits::eTransfer,
+		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_src);
+	}
+
+	m_status = DLSSStatus::Active;
+	m_status_message = fmt::format("DLSS Active: {} -> {}",
+	                               DLSSModeToString(m_settings.mode),
+	                               fmt::format("{}x{}", target_extent.width, target_extent.height));
+	out_upscaled_image = &m_output_image;
+	return true;
+}
+
+void DLSSManager::ReleaseResources(GraphicContext& graphics) {
+	if (m_output_view != nullptr) {
+		graphics.device.destroyImageView(m_output_view, nullptr);
+		m_output_view = nullptr;
+	}
+	if (m_output_image.image != nullptr) {
+		graphics.DeleteImage(m_output_image);
+	}
+	m_output_extent = {};
+
+	DestroyFallbackBuffers(graphics);
+}
+
+void DLSSManager::Shutdown(GraphicContext& graphics) {
+	ReleaseResources(graphics);
+
+	if (m_streamline_loaded) {
+		sl::ViewportHandle viewport(m_viewport_id);
+		slFreeResources(sl::kFeatureDLSS, viewport);
+		slShutdown();
+		m_streamline_loaded = false;
+	}
+
+	m_initialized = false;
+	m_available = false;
+	m_status = DLSSStatus::Disabled;
+	m_status_message = "DLSS Shutdown complete";
+	LOGF("[DLSS] DLSSManager shutdown complete\n");
+}
+
+} // namespace Libs::Graphics

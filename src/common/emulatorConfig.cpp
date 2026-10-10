@@ -183,6 +183,26 @@ bool PlayGoHackEnabled() {
 	return g_config->playgo_hack_enabled;
 }
 
+bool DLSSEnabled() {
+	return g_config->dlss_enabled;
+}
+
+uint32_t GetDLSSMode() {
+	return g_config->dlss_mode;
+}
+
+float GetDLSSSharpness() {
+	return g_config->dlss_sharpness;
+}
+
+uint32_t GetDLSSPreset() {
+	return g_config->dlss_preset;
+}
+
+bool DLSSDiagnosticsEnabled() {
+	return g_config->dlss_diagnostics;
+}
+
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 bool RedZoneProtectionEnabled() {
 	return g_config->red_zone_protection_enabled;
