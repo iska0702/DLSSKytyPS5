@@ -1141,6 +1141,15 @@ static void VulkanGetExtensions(VulkanExtensions& r) {
 	} else {
 		r.enable_validation_layers = false;
 	}
+	if (HasExtension(r.available_extensions, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
+		r.required_extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+	}
+	if (HasExtension(r.available_extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME)) {
+		r.required_extensions.push_back(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
+	}
+	if (HasExtension(r.available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME)) {
+		r.required_extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
+	}
 
 	for (const char* ext: r.required_extensions) {
 		LOGF("Vulkan required extension: %s\n", ext);
@@ -1641,6 +1650,18 @@ void WindowContext::CreateVulkan() {
 			device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
 		}
 		// NVIDIA DLSS / NGX CUDA kernel extensions
+		if (HasExtension(available_extensions, "VK_KHR_external_memory")) {
+			device_extensions.push_back("VK_KHR_external_memory");
+		}
+		if (HasExtension(available_extensions, "VK_KHR_external_memory_win32")) {
+			device_extensions.push_back("VK_KHR_external_memory_win32");
+		}
+		if (HasExtension(available_extensions, "VK_KHR_external_semaphore")) {
+			device_extensions.push_back("VK_KHR_external_semaphore");
+		}
+		if (HasExtension(available_extensions, "VK_KHR_external_semaphore_win32")) {
+			device_extensions.push_back("VK_KHR_external_semaphore_win32");
+		}
 		if (HasExtension(available_extensions, "VK_NVX_binary_import")) {
 			device_extensions.push_back("VK_NVX_binary_import");
 		}

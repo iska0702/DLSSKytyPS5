@@ -2202,6 +2202,10 @@ void RuntimeLinker::Relocate(Program* program) {
 	if (g_invalid_memory == 0) {
 		g_invalid_memory = Libs::LibKernel::Memory::AllocateRuntimeMemory(
 		    INVALID_MEMORY, 4096, Common::VirtualMemory::Mode::NoAccess, "invalid_memory", true);
+		if (g_invalid_memory == 0) {
+			g_invalid_memory = Libs::LibKernel::Memory::AllocateRuntimeMemory(
+			    0, 4096, Common::VirtualMemory::Mode::NoAccess, "invalid_memory", false);
+		}
 		EXIT_NOT_IMPLEMENTED(g_invalid_memory == 0);
 	}
 

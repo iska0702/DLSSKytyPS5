@@ -603,6 +603,10 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 }
 
 static int Main(int argc, char* argv[]) {
+#if defined(_WIN32)
+	_putenv("DISABLE_VULKAN_OBS_CAPTURE=1");
+	_putenv("VK_LOADER_LAYERS_DISABLE=VK_LAYER_OBS_HOOK,VK_LAYER_RTSS");
+#endif
 	VirtualMemory::Init();
 	InitializeThreads();
 #if defined(KYTY_PGO_GENERATE)

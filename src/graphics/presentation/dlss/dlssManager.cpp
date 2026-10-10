@@ -362,7 +362,12 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	// Set DLSS Options in Streamline
 	sl::ViewportHandle viewport(m_viewport_id);
 	sl::DLSSOptions dlss_options {};
-	dlss_options.mode = ConvertDLSSMode(m_settings.mode);
+	auto effective_mode = m_settings.mode;
+	if (input_extent.width >= target_extent.width && input_extent.height >= target_extent.height &&
+	    effective_mode != DLSSMode::Off && effective_mode != DLSSMode::DLAA) {
+		effective_mode = DLSSMode::DLAA;
+	}
+	dlss_options.mode = ConvertDLSSMode(effective_mode);
 	dlss_options.outputWidth = target_extent.width;
 	dlss_options.outputHeight = target_extent.height;
 	dlss_options.sharpness = m_settings.sharpness;
@@ -381,8 +386,9 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	if (m_settings.diagnostics) {
 		sl::DLSSOptimalSettings opt {};
 		if (slDLSSGetOptimalSettings(dlss_options, opt) == sl::Result::eOk) {
-			LOGF("[DLSS][Diag] Mode: %s, Target: %ux%u, Optimal Render: %ux%u (Min: %ux%u, Max: %ux%u)\n",
-			     DLSSModeToString(m_settings.mode), target_extent.width, target_extent.height,
+			LOGF("[DLSS][Diag] Mode: %s (Effective: %s), Target: %ux%u, Optimal Render: %ux%u (Min: %ux%u, Max: %ux%u)\n",
+			     DLSSModeToString(m_settings.mode), DLSSModeToString(effective_mode),
+			     target_extent.width, target_extent.height,
 			     opt.optimalRenderWidth, opt.optimalRenderHeight, opt.renderWidthMin, opt.renderHeightMin,
 			     opt.renderWidthMax, opt.renderHeightMax);
 		}
@@ -398,6 +404,17 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	out_upscaled_image = nullptr;
 
 	if (!m_settings.enabled || m_settings.mode == DLSSMode::Off || !m_available || !m_streamline_loaded) {
+		return false;
+	}
+
+	if (source_extent.width > target_extent.width || source_extent.height > target_extent.height) {
+		// DLSS Super Resolution is an upscaler; it cannot downscale.
+		// When the game renders at higher resolution than the output window (e.g. 4K frame to 720p window),
+		// fall back smoothly to the standard presentation blit/downscale.
+		m_status = DLSSStatus::Available;
+		m_status_message = fmt::format("Input ({}x{}) > Target ({}x{})",
+		                               source_extent.width, source_extent.height,
+		                               target_extent.width, target_extent.height);
 		return false;
 	}
 
