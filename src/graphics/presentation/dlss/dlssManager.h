@@ -50,6 +50,9 @@ public:
 	/// Frees GPU resources allocated by DLSS.
 	void ReleaseResources(GraphicContext& graphics);
 
+	/// Returns real-time status string for window title bar or OSD overlay.
+	[[nodiscard]] std::string GetOverlayInfo() const;
+
 private:
 	bool SetupStreamline(GraphicContext& graphics);
 	void CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D extent);

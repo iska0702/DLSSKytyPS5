@@ -635,4 +635,21 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 	LOGF("[DLSS] DLSSManager shutdown complete\n");
 }
 
+std::string DLSSManager::GetOverlayInfo() const {
+	if (!m_settings.enabled || m_settings.mode == DLSSMode::Off) {
+		return "DLSS: Off";
+	}
+	const auto st = m_status.load();
+	if (st == DLSSStatus::Active) {
+		return fmt::format("DLSS: Active ({} {}x{}->{}x{})",
+		                   DLSSModeToString(m_settings.mode),
+		                   m_prev_input_extent.width, m_prev_input_extent.height,
+		                   m_prev_target_extent.width, m_prev_target_extent.height);
+	}
+	if (st == DLSSStatus::Available) {
+		return fmt::format("DLSS: Ready ({})", DLSSModeToString(m_settings.mode));
+	}
+	return fmt::format("DLSS: {}", DLSSStatusToString(st));
+}
+
 } // namespace Libs::Graphics
