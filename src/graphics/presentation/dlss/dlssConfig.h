@@ -32,12 +32,31 @@ enum class DLSSStatus : uint32_t {
 	Error,
 };
 
+enum class DLSSGMode : uint32_t {
+	Off = 0,
+	FG_2X = 1,        // 2x Multiplier (Frame Generation — 1 AI frame)
+	MFG_3X = 2,       // 3x Multiplier (Multi-Frame Generation — 2 AI frames)
+	MFG_4X = 3,       // 4x Multiplier (Multi-Frame Generation — 3 AI frames)
+	MFG_Dynamic = 4,  // Dynamic Multi-Frame Generation (aligned to display refresh rate)
+};
+
+enum class ReflexMode : uint32_t {
+	Off = 0,
+	On = 1,
+	Boost = 2,
+};
+
 struct DLSSSettings {
-	bool       enabled     = false;
-	DLSSMode   mode        = DLSSMode::Quality;
-	float      sharpness   = 0.0f;
-	DLSSPreset preset      = DLSSPreset::Default;
-	bool       diagnostics = false;
+	bool        enabled     = false;
+	DLSSMode    mode        = DLSSMode::Quality;
+	float       sharpness   = 0.0f;
+	DLSSPreset  preset      = DLSSPreset::Default;
+	bool        diagnostics = false;
+
+	// Frame Generation & Multi-Frame Generation (DLSS-G)
+	bool        fg_enabled  = false;
+	DLSSGMode   fg_mode     = DLSSGMode::FG_2X;
+	ReflexMode  reflex_mode = ReflexMode::On;
 };
 
 [[nodiscard]] constexpr const char* DLSSModeToString(DLSSMode mode) noexcept {
@@ -72,6 +91,26 @@ struct DLSSSettings {
 		case DLSSStatus::Unsupported: return "DLSS Unsupported";
 		case DLSSStatus::Error: return "DLSS Initialization Failed";
 		default: return "Unknown";
+	}
+}
+
+[[nodiscard]] constexpr const char* DLSSGModeToString(DLSSGMode mode) noexcept {
+	switch (mode) {
+		case DLSSGMode::FG_2X: return "FG (2x)";
+		case DLSSGMode::MFG_3X: return "MFG (3x)";
+		case DLSSGMode::MFG_4X: return "MFG (4x)";
+		case DLSSGMode::MFG_Dynamic: return "Dynamic MFG";
+		case DLSSGMode::Off:
+		default: return "Off";
+	}
+}
+
+[[nodiscard]] constexpr const char* ReflexModeToString(ReflexMode mode) noexcept {
+	switch (mode) {
+		case ReflexMode::On: return "Reflex: On";
+		case ReflexMode::Boost: return "Reflex: On+Boost";
+		case ReflexMode::Off:
+		default: return "Reflex: Off";
 	}
 }
 

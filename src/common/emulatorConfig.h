@@ -91,6 +91,9 @@ struct ConfigOptions {
 	float                  dlss_sharpness              = 0.0f;
 	uint32_t               dlss_preset                 = 0;
 	bool                   dlss_diagnostics            = false;
+	bool                   dlss_fg_enabled             = false;
+	uint32_t               dlss_fg_mode                = 1; // 1 = 2x, 2 = 3x, 3 = 4x, 4 = dynamic
+	uint32_t               reflex_mode                 = 1; // 0 = off, 1 = on, 2 = boost
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	bool red_zone_protection_enabled = false;
 #endif
@@ -104,6 +107,9 @@ uint32_t GetDLSSMode();
 float GetDLSSSharpness();
 uint32_t GetDLSSPreset();
 bool DLSSDiagnosticsEnabled();
+bool DLSSFGEnabled();
+uint32_t GetDLSSFGMode();
+uint32_t GetReflexMode();
 
 uint32_t GetScreenWidth();
 uint32_t GetScreenHeight();

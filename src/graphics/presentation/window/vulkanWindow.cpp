@@ -1715,6 +1715,9 @@ void WindowContext::CreateVulkan() {
 	dlss_settings.sharpness   = Config::GetDLSSSharpness();
 	dlss_settings.preset      = static_cast<DLSSPreset>(Config::GetDLSSPreset());
 	dlss_settings.diagnostics = Config::DLSSDiagnosticsEnabled();
+	dlss_settings.fg_enabled  = Config::DLSSFGEnabled();
+	dlss_settings.fg_mode     = static_cast<DLSSGMode>(Config::GetDLSSFGMode());
+	dlss_settings.reflex_mode = static_cast<ReflexMode>(Config::GetReflexMode());
 	if (dlss_settings.enabled) {
 		if (!DLSSManager::Instance().Initialize(graphic_ctx, dlss_settings)) {
 			LOGF("[DLSS] Initialization did not succeed, fallback blitting will be used.\n");

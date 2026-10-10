@@ -6,6 +6,9 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include <sl_dlss_g.h>
+#include <sl_reflex.h>
+#include <sl_pcl.h>
 #include <sl_helpers_vk.h>
 
 #include <algorithm>
@@ -53,6 +56,15 @@ static sl::DLSSPreset ConvertDLSSPreset(DLSSPreset preset) noexcept {
 		case DLSSPreset::PresetM: return sl::DLSSPreset::ePresetM;
 		case DLSSPreset::Default:
 		default: return sl::DLSSPreset::eDefault;
+	}
+}
+
+static sl::ReflexMode ConvertReflexMode(ReflexMode mode) noexcept {
+	switch (mode) {
+		case ReflexMode::Boost: return sl::ReflexMode::eLowLatencyWithBoost;
+		case ReflexMode::On: return sl::ReflexMode::eLowLatency;
+		case ReflexMode::Off:
+		default: return sl::ReflexMode::eOff;
 	}
 }
 
@@ -108,9 +120,14 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 
 	pref.flags = sl::PreferenceFlags::eDisableCLStateTracking |
 	             sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-	sl::Feature features[] = { sl::kFeatureDLSS };
+	sl::Feature features[] = {
+		sl::kFeatureDLSS,
+		sl::kFeatureDLSS_G,
+		sl::kFeatureReflex,
+		sl::kFeaturePCL,
+	};
 	pref.featuresToLoad = features;
-	pref.numFeaturesToLoad = 1;
+	pref.numFeaturesToLoad = 4;
 	pref.renderAPI = sl::RenderAPI::eVulkan;
 	pref.applicationId = 0x505335; // 'PS5' custom application ID
 	pref.engine = sl::EngineType::eCustom;
@@ -158,21 +175,52 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 		adapter_info.deviceLUIDSizeInBytes = static_cast<uint32_t>(id_props.deviceLUID.size());
 	}
 	res = slIsFeatureSupported(sl::kFeatureDLSS, adapter_info);
-	std::printf("[DLSS] slIsFeatureSupported (LUID) result: %d\n", static_cast<int>(res));
+	std::printf("[DLSS] slIsFeatureSupported DLSS (LUID) result: %d\n", static_cast<int>(res));
 
 	if (res != sl::Result::eOk) {
 		adapter_info.deviceLUID = nullptr;
 		adapter_info.deviceLUIDSizeInBytes = 0;
 		adapter_info.vkPhysicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
 		res = slIsFeatureSupported(sl::kFeatureDLSS, adapter_info);
-		std::printf("[DLSS] slIsFeatureSupported (VkPhysicalDevice) result: %d\n", static_cast<int>(res));
+		std::printf("[DLSS] slIsFeatureSupported DLSS (VkPhysicalDevice) result: %d\n", static_cast<int>(res));
 	}
 
-	// Explicitly ensure feature is loaded for this device
+	// Explicitly ensure features are loaded for this device
 	slSetFeatureLoaded(sl::kFeatureDLSS, true);
 	bool is_loaded = false;
 	const sl::Result load_res = slIsFeatureLoaded(sl::kFeatureDLSS, is_loaded);
-	std::printf("[DLSS] slIsFeatureLoaded result: %d, loaded: %d\n", static_cast<int>(load_res), is_loaded ? 1 : 0);
+	std::printf("[DLSS] slIsFeatureLoaded DLSS result: %d, loaded: %d\n", static_cast<int>(load_res), is_loaded ? 1 : 0);
+
+	// Check Frame Generation (DLSS-G) support
+	slSetFeatureLoaded(sl::kFeatureDLSS_G, true);
+	bool fg_loaded = false;
+	slIsFeatureLoaded(sl::kFeatureDLSS_G, fg_loaded);
+	sl::Result fg_res = slIsFeatureSupported(sl::kFeatureDLSS_G, adapter_info);
+	m_fg_supported = (fg_res == sl::Result::eOk || fg_loaded);
+	std::printf("[DLSS] Frame Generation (DLSS-G) support: %d, loaded: %d\n",
+	            static_cast<int>(fg_res), fg_loaded ? 1 : 0);
+
+	// Check NVIDIA Reflex support
+	slSetFeatureLoaded(sl::kFeatureReflex, true);
+	bool reflex_loaded = false;
+	slIsFeatureLoaded(sl::kFeatureReflex, reflex_loaded);
+	sl::Result reflex_res = slIsFeatureSupported(sl::kFeatureReflex, adapter_info);
+	m_reflex_supported = (reflex_res == sl::Result::eOk || reflex_loaded);
+	std::printf("[DLSS] NVIDIA Reflex support: %d, loaded: %d\n",
+	            static_cast<int>(reflex_res), reflex_loaded ? 1 : 0);
+
+	slSetFeatureLoaded(sl::kFeaturePCL, true);
+
+	// Query Frame Generation / Multi-Frame Generation capabilities
+	sl::ViewportHandle viewport(m_viewport_id);
+	sl::DLSSGState fg_state {};
+	if (slDLSSGGetState(viewport, fg_state, nullptr) == sl::Result::eOk) {
+		m_max_fg_frames = fg_state.numFramesToGenerateMax;
+		m_dynamic_mfg_supported = (fg_state.bIsDynamicMFGSupported == sl::Boolean::eTrue);
+		std::printf("[DLSS] DLSS-G Capabilities: max generated frames = %u (MFG %s), dynamic MFG = %d\n",
+		            m_max_fg_frames, m_max_fg_frames > 1 ? "Supported" : "Single FG only",
+		            m_dynamic_mfg_supported ? 1 : 0);
+	}
 
 	if (res != sl::Result::eOk && !is_loaded) {
 		// As a final check, test if DLSS optimal settings can be queried on the active device
@@ -381,6 +429,60 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	sl::Result res = slDLSSSetOptions(viewport, dlss_options);
 	if (res != sl::Result::eOk) {
 		LOGF("[DLSS] slDLSSSetOptions returned %d\n", static_cast<int>(res));
+	}
+
+	// Configure Frame Generation & Multi-Frame Generation (DLSS-G)
+	if (m_fg_supported && m_settings.fg_enabled && m_settings.fg_mode != DLSSGMode::Off) {
+		sl::DLSSGOptions g_options {};
+		if (m_settings.fg_mode == DLSSGMode::MFG_Dynamic) {
+			g_options.mode = sl::DLSSGMode::eDynamic;
+			g_options.dynamicTargetFrameRate = 0.0f; // Auto-align with display refresh rate
+		} else {
+			g_options.mode = sl::DLSSGMode::eOn;
+			if (m_settings.fg_mode == DLSSGMode::MFG_4X) {
+				g_options.numFramesToGenerate = 3; // 4x multiplier
+			} else if (m_settings.fg_mode == DLSSGMode::MFG_3X) {
+				g_options.numFramesToGenerate = 2; // 3x multiplier
+			} else {
+				g_options.numFramesToGenerate = 1; // 2x multiplier
+			}
+		}
+		g_options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+		g_options.colorWidth = target_extent.width;
+		g_options.colorHeight = target_extent.height;
+		g_options.colorBufferFormat = static_cast<uint32_t>(m_output_image.format);
+		g_options.mvecDepthWidth = input_extent.width;
+		g_options.mvecDepthHeight = input_extent.height;
+		g_options.mvecBufferFormat = static_cast<uint32_t>(m_fallback_mvec_image.format);
+		g_options.depthBufferFormat = static_cast<uint32_t>(m_fallback_depth_image.format);
+
+		sl::Result g_res = slDLSSGSetOptions(viewport, g_options);
+		m_fg_active = (g_res == sl::Result::eOk);
+		if (g_res != sl::Result::eOk) {
+			LOGF("[DLSS] slDLSSGSetOptions returned %d\n", static_cast<int>(g_res));
+		} else {
+			std::printf("[DLSS] Frame Generation active: mode %s (%u generated frame(s) per real frame)\n",
+			            DLSSGModeToString(m_settings.fg_mode), g_options.numFramesToGenerate);
+			std::fflush(stdout);
+		}
+	} else if (m_fg_supported) {
+		sl::DLSSGOptions g_options {};
+		g_options.mode = sl::DLSSGMode::eOff;
+		slDLSSGSetOptions(viewport, g_options);
+		m_fg_active = false;
+	}
+
+	// Configure NVIDIA Reflex Low Latency
+	if (m_reflex_supported) {
+		sl::ReflexOptions reflex_options {};
+		if (m_settings.fg_enabled) {
+			reflex_options.mode = (m_settings.reflex_mode == ReflexMode::Boost)
+			                          ? sl::ReflexMode::eLowLatencyWithBoost
+			                          : sl::ReflexMode::eLowLatency;
+		} else {
+			reflex_options.mode = ConvertReflexMode(m_settings.reflex_mode);
+		}
+		slReflexSetOptions(reflex_options);
 	}
 
 	if (m_settings.diagnostics) {
@@ -640,6 +742,16 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		return false;
 	}
 
+	m_last_frame_token = frame_token;
+
+	// Query actual generated frames multiplier from DLSS-G state
+	if (m_fg_active) {
+		sl::DLSSGState fg_state {};
+		if (slDLSSGGetState(viewport, fg_state, nullptr) == sl::Result::eOk && fg_state.numFramesActuallyPresented > 0) {
+			m_presented_multiplier = fg_state.numFramesActuallyPresented;
+		}
+	}
+
 	// Transition output image to eTransferSrcOptimal so swapchain blit/copy can read it
 	{
 		vk::ImageMemoryBarrier to_src {};
@@ -665,6 +777,13 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	return true;
 }
 
+void DLSSManager::SetPresentMarker(bool start) {
+	if (m_last_frame_token != nullptr && m_reflex_supported) {
+		auto* token = static_cast<sl::FrameToken*>(m_last_frame_token);
+		slPCLSetMarker(start ? sl::PCLMarker::ePresentStart : sl::PCLMarker::ePresentEnd, *token);
+	}
+}
+
 void DLSSManager::ReleaseResources(GraphicContext& graphics) {
 	if (m_output_view != nullptr) {
 		graphics.device.destroyImageView(m_output_view, nullptr);
@@ -683,6 +802,12 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 
 	if (m_streamline_loaded) {
 		sl::ViewportHandle viewport(m_viewport_id);
+		if (m_fg_supported) {
+			sl::DLSSGOptions g_options {};
+			g_options.mode = sl::DLSSGMode::eOff;
+			slDLSSGSetOptions(viewport, g_options);
+			slFreeResources(sl::kFeatureDLSS_G, viewport);
+		}
 		slFreeResources(sl::kFeatureDLSS, viewport);
 		slShutdown();
 		m_streamline_loaded = false;
@@ -690,6 +815,7 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 
 	m_initialized = false;
 	m_available = false;
+	m_fg_active = false;
 	m_status = DLSSStatus::Disabled;
 	m_status_message = "DLSS Shutdown complete";
 	LOGF("[DLSS] DLSSManager shutdown complete\n");
@@ -701,10 +827,19 @@ std::string DLSSManager::GetOverlayInfo() const {
 	}
 	const auto st = m_status.load();
 	if (st == DLSSStatus::Active) {
-		return fmt::format("DLSS: Active ({} {}x{}->{}x{})",
+		std::string fg_str;
+		if (m_settings.fg_enabled && m_fg_active) {
+			fg_str = fmt::format(" + {}", DLSSGModeToString(m_settings.fg_mode));
+		}
+		std::string reflex_str;
+		if (m_settings.fg_enabled || m_settings.reflex_mode != ReflexMode::Off) {
+			reflex_str = fmt::format(" | {}", ReflexModeToString(m_settings.reflex_mode));
+		}
+		return fmt::format("DLSS: Active ({} {}x{}->{}x{}){}{}",
 		                   DLSSModeToString(m_settings.mode),
 		                   m_prev_input_extent.width, m_prev_input_extent.height,
-		                   m_prev_target_extent.width, m_prev_target_extent.height);
+		                   m_prev_target_extent.width, m_prev_target_extent.height,
+		                   fg_str, reflex_str);
 	}
 	if (st == DLSSStatus::Available) {
 		return fmt::format("DLSS: Ready ({})", DLSSModeToString(m_settings.mode));

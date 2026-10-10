@@ -422,6 +422,54 @@ To use your own sound, replace the emulator's assets/sounds/trophy-unlock.wav wi
          </widget>
         </item>
         <item row="7" column="0" colspan="2">
+         <widget class="QCheckBox" name="checkBox_dlss_fg_enable">
+          <property name="toolTip">
+           <string>Generate intermediate frames directly on GPU Tensor Cores to multiply frame rate (DLSS 3 Frame Gen / DLSS 4 Multi-Frame Gen)</string>
+          </property>
+          <property name="text">
+           <string>Enable Frame Generation (DLSS-G / MFG)</string>
+          </property>
+         </widget>
+        </item>
+        <item row="8" column="0">
+         <widget class="QLabel" name="label_dlss_fg_mode">
+          <property name="text">
+           <string>Frame Gen Mode:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="8" column="1">
+         <widget class="QComboBox" name="comboBox_dlss_fg_mode">
+          <property name="toolTip">
+           <string>Select Frame Generation multiplier (2x for RTX 40/50, 3x / 4x / Dynamic for RTX 50 Blackwell)</string>
+          </property>
+         </widget>
+        </item>
+        <item row="9" column="0" colspan="2">
+         <widget class="QLabel" name="label_dlss_fg_desc">
+          <property name="text">
+           <string>Generates 1 frame per real frame (doubles FPS). Supported on RTX 40 &amp; 50 series.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="10" column="0">
+         <widget class="QLabel" name="label_reflex_mode">
+          <property name="text">
+           <string>NVIDIA Reflex:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="10" column="1">
+         <widget class="QComboBox" name="comboBox_reflex_mode">
+          <property name="toolTip">
+           <string>Reduces system latency and optimizes frame delivery. Automatically engaged when Frame Generation is active.</string>
+          </property>
+         </widget>
+        </item>
+        <item row="11" column="0" colspan="2">
          <widget class="QCheckBox" name="checkBox_dlss_diagnostics">
           <property name="toolTip">
            <string>Enable verbose DLSS &amp; Streamline log messages</string>

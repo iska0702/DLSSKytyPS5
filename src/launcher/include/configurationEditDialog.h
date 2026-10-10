@@ -42,6 +42,8 @@ private:
 	QToolButton*                 m_remove_game_dir_button = nullptr;
 	bool                         m_global_settings        = false;
 	bool                         m_has_nvidia_rtx         = false;
+	bool                         m_has_nvidia_fg          = false;
+	bool                         m_has_nvidia_mfg         = false;
 
 	void UpdateDLSSUI();
 

@@ -257,13 +257,41 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	if (info.tessellation_enabled) {
 		args << "--tessellation";
 	}
-	if (info.dlss_enabled) {
+	if (info.dlss_enabled || info.dlss_fg_enabled) {
 		args << "--dlss";
 		args << "--dlss-mode" << EnumToText(info.dlss_mode);
 		args << "--dlss-sharpness" << QString::number(info.dlss_sharpness, 'f', 2);
 		args << "--dlss-preset" << EnumToText(info.dlss_preset);
 		if (info.dlss_diagnostics) {
 			args << "--dlss-diagnostics";
+		}
+		if (info.dlss_fg_enabled) {
+			args << "--dlss-fg";
+			switch (info.dlss_fg_mode) {
+			case Configuration::DLSSGMode::FG_2X:
+				args << "--dlss-mfg" << "2x";
+				break;
+			case Configuration::DLSSGMode::MFG_3X:
+				args << "--dlss-mfg" << "3x";
+				break;
+			case Configuration::DLSSGMode::MFG_4X:
+				args << "--dlss-mfg" << "4x";
+				break;
+			case Configuration::DLSSGMode::Dynamic:
+				args << "--dlss-mfg" << "dynamic";
+				break;
+			}
+		}
+		switch (info.reflex_mode) {
+		case Configuration::ReflexMode::On:
+			args << "--reflex" << "on";
+			break;
+		case Configuration::ReflexMode::Boost:
+			args << "--reflex" << "boost";
+			break;
+		case Configuration::ReflexMode::Off:
+			args << "--reflex" << "off";
+			break;
 		}
 	}
 	args << "--vblank-frequency" << QString::number(info.vblank_frequency);

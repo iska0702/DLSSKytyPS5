@@ -203,6 +203,18 @@ bool DLSSDiagnosticsEnabled() {
 	return g_config->dlss_diagnostics;
 }
 
+bool DLSSFGEnabled() {
+	return g_config->dlss_fg_enabled;
+}
+
+uint32_t GetDLSSFGMode() {
+	return g_config->dlss_fg_mode;
+}
+
+uint32_t GetReflexMode() {
+	return g_config->reflex_mode;
+}
+
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 bool RedZoneProtectionEnabled() {
 	return g_config->red_zone_protection_enabled;

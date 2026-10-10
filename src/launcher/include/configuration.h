@@ -144,6 +144,21 @@ public:
 	};
 	Q_ENUM(DLSSPreset)
 
+	enum class DLSSGMode {
+		FG_2X,
+		MFG_3X,
+		MFG_4X,
+		Dynamic,
+	};
+	Q_ENUM(DLSSGMode)
+
+	enum class ReflexMode {
+		Off,
+		On,
+		Boost,
+	};
+	Q_ENUM(ReflexMode)
+
 	Configuration() = default;
 
 	QString    name;
@@ -213,6 +228,9 @@ public:
 	float      dlss_sharpness   = 0.0f;
 	DLSSPreset dlss_preset      = DLSSPreset::Default;
 	bool       dlss_diagnostics = false;
+	bool       dlss_fg_enabled  = false;
+	DLSSGMode  dlss_fg_mode     = DLSSGMode::FG_2X;
+	ReflexMode reflex_mode      = ReflexMode::On;
 
 	QString elf = QStringLiteral("eboot.bin");
 
@@ -251,6 +269,9 @@ public:
 		dlss_sharpness     = other.dlss_sharpness;
 		dlss_preset        = other.dlss_preset;
 		dlss_diagnostics   = other.dlss_diagnostics;
+		dlss_fg_enabled    = other.dlss_fg_enabled;
+		dlss_fg_mode       = other.dlss_fg_mode;
+		reflex_mode        = other.reflex_mode;
 	}
 
 	void CopyGameInfoFrom(const Configuration& other) {
@@ -304,6 +325,9 @@ public:
 		s->setValue("dlss_sharpness", static_cast<double>(dlss_sharpness));
 		KYTY_CFG_SET(dlss_preset);
 		KYTY_CFG_SET(dlss_diagnostics);
+		KYTY_CFG_SET(dlss_fg_enabled);
+		KYTY_CFG_SET(dlss_fg_mode);
+		KYTY_CFG_SET(reflex_mode);
 		KYTY_CFG_SET(elf);
 	}
 
@@ -363,6 +387,15 @@ public:
 			dlss_preset = DLSSPreset::Default;
 		}
 		dlss_diagnostics = s->value("dlss_diagnostics", dlss_diagnostics).toBool();
+		dlss_fg_enabled  = s->value("dlss_fg_enabled", dlss_fg_enabled).toBool();
+		KYTY_CFG_GET(dlss_fg_mode);
+		if (EnumToText(dlss_fg_mode).isEmpty()) {
+			dlss_fg_mode = DLSSGMode::FG_2X;
+		}
+		KYTY_CFG_GET(reflex_mode);
+		if (EnumToText(reflex_mode).isEmpty()) {
+			reflex_mode = ReflexMode::On;
+		}
 		elf              = s->value("elf", elf).toString();
 	}
 };

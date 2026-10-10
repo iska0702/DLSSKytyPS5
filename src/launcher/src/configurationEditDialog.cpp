@@ -199,6 +199,18 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	connect(m_ui->checkBox_dlss_enable, &QCheckBox::toggled, this, [this](bool) {
 		UpdateDLSSUI();
 	});
+	connect(m_ui->checkBox_dlss_fg_enable, &QCheckBox::toggled, this, [this](bool checked) {
+		if (checked && !m_ui->checkBox_dlss_enable->isChecked()) {
+			m_ui->checkBox_dlss_enable->setChecked(true);
+		}
+		UpdateDLSSUI();
+	});
+	connect(m_ui->comboBox_dlss_fg_mode, &QComboBox::currentIndexChanged, this, [this](int) {
+		UpdateDLSSUI();
+	});
+	connect(m_ui->comboBox_reflex_mode, &QComboBox::currentIndexChanged, this, [this](int) {
+		UpdateDLSSUI();
+	});
 	connect(m_ui->comboBox_dlss_mode, &QComboBox::currentIndexChanged, this, [this](int) {
 		UpdateDLSSUI();
 	});
@@ -311,16 +323,29 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	instance.setFlags(QVulkanInstance::NoPortabilityDrivers);
 #endif
 	m_has_nvidia_rtx = false;
+	m_has_nvidia_fg  = false;
+	m_has_nvidia_mfg = false;
 	if (instance.create()) {
 		QVulkanWindow window;
 		window.setVulkanInstance(&instance);
 		for (const auto& device: window.availablePhysicalDevices()) {
 			QString dev_name = QString::fromUtf8(device.deviceName);
 			m_ui->comboBox_gpu->addItem(dev_name);
-			if (device.vendorID == 0x10DE &&
-			    (dev_name.contains("RTX", Qt::CaseInsensitive) ||
-			     dev_name.contains("TITAN", Qt::CaseInsensitive))) {
-				m_has_nvidia_rtx = true;
+			if (device.vendorID == 0x10DE) {
+				if (dev_name.contains("RTX", Qt::CaseInsensitive) ||
+				    dev_name.contains("TITAN", Qt::CaseInsensitive)) {
+					m_has_nvidia_rtx = true;
+				}
+				if (dev_name.contains("RTX 40", Qt::CaseInsensitive) ||
+				    dev_name.contains("RTX 50", Qt::CaseInsensitive) ||
+				    dev_name.contains("Ada", Qt::CaseInsensitive) ||
+				    dev_name.contains("Blackwell", Qt::CaseInsensitive)) {
+					m_has_nvidia_fg = true;
+				}
+				if (dev_name.contains("RTX 50", Qt::CaseInsensitive) ||
+				    dev_name.contains("Blackwell", Qt::CaseInsensitive)) {
+					m_has_nvidia_mfg = true;
+				}
 			}
 		}
 	}
@@ -399,6 +424,36 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	m_ui->slider_dlss_sharpness->setValue(
 	    qBound(0, static_cast<int>(std::round(info.dlss_sharpness * 100.0f)), 100));
 	m_ui->label_dlss_sharpness_value->setText(QString::number(info.dlss_sharpness, 'f', 2));
+
+	m_ui->comboBox_dlss_fg_mode->clear();
+	m_ui->comboBox_dlss_fg_mode->addItem(tr("2x Multiplier (DLSS 3 Frame Gen)"));
+	m_ui->comboBox_dlss_fg_mode->addItem(tr("3x Multiplier (DLSS 4 Multi-Frame Gen)"));
+	m_ui->comboBox_dlss_fg_mode->addItem(tr("4x Multiplier (DLSS 4 Multi-Frame Gen)"));
+	m_ui->comboBox_dlss_fg_mode->addItem(tr("Dynamic Multiplier (Adaptive MFG)"));
+	int fg_mode_idx = 0;
+	switch (info.dlss_fg_mode) {
+	case Configuration::DLSSGMode::FG_2X:   fg_mode_idx = 0; break;
+	case Configuration::DLSSGMode::MFG_3X:  fg_mode_idx = 1; break;
+	case Configuration::DLSSGMode::MFG_4X:  fg_mode_idx = 2; break;
+	case Configuration::DLSSGMode::Dynamic: fg_mode_idx = 3; break;
+	default:                                fg_mode_idx = 0; break;
+	}
+	m_ui->comboBox_dlss_fg_mode->setCurrentIndex(fg_mode_idx);
+	m_ui->checkBox_dlss_fg_enable->setChecked(info.dlss_fg_enabled);
+
+	m_ui->comboBox_reflex_mode->clear();
+	m_ui->comboBox_reflex_mode->addItem(tr("On (Recommended)"));
+	m_ui->comboBox_reflex_mode->addItem(tr("On + Boost"));
+	m_ui->comboBox_reflex_mode->addItem(tr("Off"));
+	int reflex_idx = 0;
+	switch (info.reflex_mode) {
+	case Configuration::ReflexMode::On:    reflex_idx = 0; break;
+	case Configuration::ReflexMode::Boost: reflex_idx = 1; break;
+	case Configuration::ReflexMode::Off:   reflex_idx = 2; break;
+	default:                               reflex_idx = 0; break;
+	}
+	m_ui->comboBox_reflex_mode->setCurrentIndex(reflex_idx);
+
 	m_ui->checkBox_dlss_diagnostics->setChecked(info.dlss_diagnostics);
 	m_ui->checkBox_dlss_enable->setChecked(info.dlss_enabled);
 
@@ -406,16 +461,27 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 }
 
 void ConfigurationEditDialog::UpdateDLSSUI() {
-	int  gpu_sel       = m_ui->comboBox_gpu->currentIndex();
-	bool gpu_supported = m_has_nvidia_rtx;
+	int  gpu_sel           = m_ui->comboBox_gpu->currentIndex();
+	bool gpu_supported     = m_has_nvidia_rtx;
+	bool fg_gpu_supported  = m_has_nvidia_fg;
+	bool mfg_gpu_supported = m_has_nvidia_mfg;
 	if (gpu_sel > 0) {
 		QString current_gpu_name = m_ui->comboBox_gpu->currentText();
 		gpu_supported            = current_gpu_name.contains("NVIDIA", Qt::CaseInsensitive) &&
 		                (current_gpu_name.contains("RTX", Qt::CaseInsensitive) ||
 		                 current_gpu_name.contains("TITAN", Qt::CaseInsensitive));
+		fg_gpu_supported = current_gpu_name.contains("NVIDIA", Qt::CaseInsensitive) &&
+		                   (current_gpu_name.contains("RTX 40", Qt::CaseInsensitive) ||
+		                    current_gpu_name.contains("RTX 50", Qt::CaseInsensitive) ||
+		                    current_gpu_name.contains("Ada", Qt::CaseInsensitive) ||
+		                    current_gpu_name.contains("Blackwell", Qt::CaseInsensitive));
+		mfg_gpu_supported = current_gpu_name.contains("NVIDIA", Qt::CaseInsensitive) &&
+		                    (current_gpu_name.contains("RTX 50", Qt::CaseInsensitive) ||
+		                     current_gpu_name.contains("Blackwell", Qt::CaseInsensitive));
 	}
 
 	bool             streamline_found = false;
+	bool             fg_dll_found     = false;
 	const QString    app_dir          = QCoreApplication::applicationDirPath();
 	const QStringList search_paths     = {
 	    app_dir,
@@ -425,11 +491,14 @@ void ConfigurationEditDialog::UpdateDLSSUI() {
 	for (const auto& path: search_paths) {
 		if (QFile::exists(path + "/sl.interposer.dll")) {
 			streamline_found = true;
-			break;
+		}
+		if (QFile::exists(path + "/sl.dlss_g.dll")) {
+			fg_dll_found = true;
 		}
 	}
 
 	bool dlss_supported = gpu_supported && streamline_found;
+	bool fg_supported   = dlss_supported && fg_gpu_supported && fg_dll_found;
 
 	if (!dlss_supported) {
 		m_ui->checkBox_dlss_enable->setEnabled(false);
@@ -444,22 +513,92 @@ void ConfigurationEditDialog::UpdateDLSSUI() {
 		m_ui->comboBox_dlss_mode->setEnabled(false);
 		m_ui->slider_dlss_sharpness->setEnabled(false);
 		m_ui->comboBox_dlss_preset->setEnabled(false);
+		m_ui->checkBox_dlss_fg_enable->setEnabled(false);
+		m_ui->checkBox_dlss_fg_enable->setChecked(false);
+		m_ui->comboBox_dlss_fg_mode->setEnabled(false);
+		m_ui->comboBox_reflex_mode->setEnabled(false);
 		m_ui->checkBox_dlss_diagnostics->setEnabled(false);
 	} else {
 		m_ui->checkBox_dlss_enable->setEnabled(true);
 		bool enabled = m_ui->checkBox_dlss_enable->isChecked();
-		if (enabled) {
-			m_ui->label_dlss_status->setText(
-			    tr("<font color='#4caf50'><b>DLSS Active</b></font>"));
-		} else {
-			m_ui->label_dlss_status->setText(
-			    tr("<font color='#2196f3'><b>DLSS Available</b> (Disabled)</font>"));
-		}
 		m_ui->comboBox_dlss_mode->setEnabled(enabled);
 		m_ui->slider_dlss_sharpness->setEnabled(enabled);
 		m_ui->comboBox_dlss_preset->setEnabled(enabled);
 		m_ui->checkBox_dlss_diagnostics->setEnabled(enabled);
+
+		// Frame Generation controls
+		if (!fg_supported) {
+			m_ui->checkBox_dlss_fg_enable->setEnabled(false);
+			m_ui->checkBox_dlss_fg_enable->setChecked(false);
+			m_ui->comboBox_dlss_fg_mode->setEnabled(false);
+			if (!fg_gpu_supported) {
+				m_ui->checkBox_dlss_fg_enable->setToolTip(
+				    tr("Requires GeForce RTX 40 or 50 series GPU"));
+			} else {
+				m_ui->checkBox_dlss_fg_enable->setToolTip(
+				    tr("sl.dlss_g.dll not found in search paths"));
+			}
+		} else {
+			m_ui->checkBox_dlss_fg_enable->setEnabled(enabled);
+			bool fg_enabled = enabled && m_ui->checkBox_dlss_fg_enable->isChecked();
+			m_ui->comboBox_dlss_fg_mode->setEnabled(fg_enabled);
+		}
+
+		m_ui->comboBox_reflex_mode->setEnabled(enabled);
+
+		if (m_ui->checkBox_dlss_fg_enable->isChecked() && m_ui->comboBox_reflex_mode->currentIndex() == 2) {
+			m_ui->comboBox_reflex_mode->setCurrentIndex(0); // Reflex required for FG
+		}
+
+		int fg_mode_idx = m_ui->comboBox_dlss_fg_mode->currentIndex();
+		if (enabled) {
+			if (fg_supported && m_ui->checkBox_dlss_fg_enable->isChecked()) {
+				QString fg_label;
+				if (fg_mode_idx == 1) {
+					fg_label = tr("MFG (3x)");
+				} else if (fg_mode_idx == 2) {
+					fg_label = tr("MFG (4x)");
+				} else if (fg_mode_idx == 3) {
+					fg_label = tr("Dynamic MFG");
+				} else {
+					fg_label = tr("FG (2x)");
+				}
+				m_ui->label_dlss_status->setText(
+				    tr("<font color='#4caf50'><b>DLSS Active + %1</b></font>").arg(fg_label));
+			} else {
+				m_ui->label_dlss_status->setText(
+				    tr("<font color='#4caf50'><b>DLSS Active</b></font>"));
+			}
+		} else {
+			m_ui->label_dlss_status->setText(
+			    tr("<font color='#2196f3'><b>DLSS Available</b> (Disabled)</font>"));
+		}
 	}
+
+	int fg_mode_idx = m_ui->comboBox_dlss_fg_mode->currentIndex();
+	QString fg_desc;
+	switch (fg_mode_idx) {
+	case 0:
+		fg_desc = tr("Generates 1 frame per real frame (doubles FPS). Supported on RTX 40 & 50 series.");
+		break;
+	case 1:
+		fg_desc = mfg_gpu_supported
+		              ? tr("Generates 2 frames per real frame (triples FPS). Fully supported on your RTX 50 GPU.")
+		              : tr("Generates 2 frames per real frame (triples FPS). Requires RTX 50 series (Blackwell).");
+		break;
+	case 2:
+		fg_desc = mfg_gpu_supported
+		              ? tr("Generates 3 frames per real frame (quadruples FPS). Fully supported on your RTX 50 GPU.")
+		              : tr("Generates 3 frames per real frame (quadruples FPS). Requires RTX 50 series (Blackwell).");
+		break;
+	case 3:
+	default:
+		fg_desc = mfg_gpu_supported
+		              ? tr("Dynamically adapts generated frames between 2x and 4x to match refresh rate. Supported on your RTX 50 GPU.")
+		              : tr("Dynamically adapts generated frames between 2x and 4x based on display refresh rate. Requires RTX 50 series (Blackwell).");
+		break;
+	}
+	m_ui->label_dlss_fg_desc->setText(fg_desc);
 
 	int     mode_idx  = m_ui->comboBox_dlss_mode->currentIndex();
 	float   scale     = 1.5f;
@@ -675,6 +814,20 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui, boo
 	                          ? static_cast<Configuration::DLSSPreset>(preset_idx)
 	                          : Configuration::DLSSPreset::Default;
 	info.dlss_diagnostics = ui.checkBox_dlss_diagnostics->isChecked();
+	info.dlss_fg_enabled  = ui.checkBox_dlss_fg_enable->isChecked();
+	switch (ui.comboBox_dlss_fg_mode->currentIndex()) {
+	case 0:  info.dlss_fg_mode = Configuration::DLSSGMode::FG_2X; break;
+	case 1:  info.dlss_fg_mode = Configuration::DLSSGMode::MFG_3X; break;
+	case 2:  info.dlss_fg_mode = Configuration::DLSSGMode::MFG_4X; break;
+	case 3:  info.dlss_fg_mode = Configuration::DLSSGMode::Dynamic; break;
+	default: info.dlss_fg_mode = Configuration::DLSSGMode::FG_2X; break;
+	}
+	switch (ui.comboBox_reflex_mode->currentIndex()) {
+	case 0:  info.reflex_mode = Configuration::ReflexMode::On; break;
+	case 1:  info.reflex_mode = Configuration::ReflexMode::Boost; break;
+	case 2:  info.reflex_mode = Configuration::ReflexMode::Off; break;
+	default: info.reflex_mode = Configuration::ReflexMode::On; break;
+	}
 }
 
 void ConfigurationEditDialog::save() {

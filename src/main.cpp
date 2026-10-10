@@ -150,6 +150,9 @@ static void PrintUsage() {
 	::printf("  --dlss-sharpness <0.0-1.0>          DLSS sharpness. Default: 0.0.\n");
 	::printf("  --dlss-preset <preset>              Default, PresetJ, PresetK, PresetL, PresetM.\n");
 	::printf("  --dlss-diagnostics                  Enable verbose DLSS & Streamline diagnostics.\n");
+	::printf("  --dlss-fg                           Enable DLSS Frame Generation (2x frame multiplier).\n");
+	::printf("  --dlss-mfg <3x|4x|dynamic>          Enable Multi-Frame Generation (3x, 4x, or dynamic).\n");
+	::printf("  --reflex <on|boost|off>             NVIDIA Reflex Low Latency mode. Default: on.\n");
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	::printf("  --redzone                            Protect the guest SysV red zone.\n");
 #endif
@@ -309,6 +312,12 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 
 		if (arg == "--dlss-diagnostics") {
 			options.config.dlss_diagnostics = true;
+			continue;
+		}
+
+		if (arg == "--dlss-fg") {
+			options.config.dlss_enabled = true;
+			options.config.dlss_fg_enabled = true;
 			continue;
 		}
 
@@ -582,6 +591,32 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 					::printf("invalid dlss preset: %s\n", value.c_str());
 					return false;
 				}
+			}
+		} else if (arg == "--dlss-mfg") {
+			options.config.dlss_enabled = true;
+			options.config.dlss_fg_enabled = true;
+			if (value == "3x" || value == "3X" || value == "3") {
+				options.config.dlss_fg_mode = 2; // MFG_3X
+			} else if (value == "4x" || value == "4X" || value == "4") {
+				options.config.dlss_fg_mode = 3; // MFG_4X
+			} else if (value == "dynamic" || value == "Dynamic") {
+				options.config.dlss_fg_mode = 4; // MFG_Dynamic
+			} else if (value == "2x" || value == "2X" || value == "2") {
+				options.config.dlss_fg_mode = 1; // FG_2X
+			} else {
+				::printf("invalid dlss mfg mode (expected 2x, 3x, 4x, dynamic): %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--reflex") {
+			if (value == "on" || value == "On" || value == "1") {
+				options.config.reflex_mode = 1;
+			} else if (value == "boost" || value == "Boost" || value == "2") {
+				options.config.reflex_mode = 2;
+			} else if (value == "off" || value == "Off" || value == "0") {
+				options.config.reflex_mode = 0;
+			} else {
+				::printf("invalid reflex mode (expected on, boost, off): %s\n", value.c_str());
+				return false;
 			}
 		} else {
 			::printf("unknown option: %s\n", arg.c_str());

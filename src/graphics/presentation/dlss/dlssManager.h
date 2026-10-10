@@ -53,6 +53,16 @@ public:
 	/// Returns real-time status string for window title bar or OSD overlay.
 	[[nodiscard]] std::string GetOverlayInfo() const;
 
+	/// FG / MFG (DLSS-G) status queries
+	[[nodiscard]] bool IsFGSupported() const noexcept { return m_fg_supported; }
+	[[nodiscard]] bool IsFGActive() const noexcept { return m_fg_active; }
+	[[nodiscard]] uint32_t GetMaxFGFrames() const noexcept { return m_max_fg_frames; }
+	[[nodiscard]] bool IsDynamicMFGSupported() const noexcept { return m_dynamic_mfg_supported; }
+	[[nodiscard]] bool IsReflexSupported() const noexcept { return m_reflex_supported; }
+
+	/// Notifies Reflex / PCL markers around presentation
+	void SetPresentMarker(bool start);
+
 private:
 	bool SetupStreamline(GraphicContext& graphics);
 	void CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D extent);
@@ -87,6 +97,15 @@ private:
 
 	vk::Extent2D            m_prev_input_extent {};
 	vk::Extent2D            m_prev_target_extent {};
+
+	// Frame Generation & Reflex state
+	bool                    m_fg_supported          = false;
+	bool                    m_fg_active             = false;
+	uint32_t                m_max_fg_frames         = 0;
+	bool                    m_dynamic_mfg_supported = false;
+	bool                    m_reflex_supported      = false;
+	uint32_t                m_presented_multiplier  = 1;
+	void*                   m_last_frame_token      = nullptr;
 };
 
 } // namespace Libs::Graphics

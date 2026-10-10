@@ -1204,7 +1204,9 @@ Swapchain::Status Swapchain::Present() {
 		// texture copies: the present never waits for them, nor for a signal not yet submitted.
 		Common::LockGuard lock(m_window.graphic_ctx.queue_mutex);
 		m_window.graphic_ctx.submission_queue.DrainReadyForPresentLocked();
+		DLSSManager::Instance().SetPresentMarker(true);
 		result = m_window.graphic_ctx.queue.presentKHR(&present);
+		DLSSManager::Instance().SetPresentMarker(false);
 	}
 	switch (result) {
 		case vk::Result::eSuccess: break;
