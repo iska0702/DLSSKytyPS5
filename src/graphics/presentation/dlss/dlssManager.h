@@ -67,6 +67,12 @@ public:
 	[[nodiscard]] uint32_t GetMaxFGFrames() const noexcept { return m_max_fg_frames; }
 	[[nodiscard]] bool IsDynamicMFGSupported() const noexcept { return m_dynamic_mfg_supported; }
 	[[nodiscard]] bool IsReflexSupported() const noexcept { return m_reflex_supported; }
+	[[nodiscard]] uint32_t GetPresentedMultiplier() const noexcept { return m_presented_multiplier; }
+	[[nodiscard]] uint32_t GetRequestedMultiplier() const noexcept;
+	[[nodiscard]] uint32_t GetEffectiveMultiplier() const noexcept;
+
+	void SetSwapchainFormat(vk::Format format) noexcept { m_swapchain_format = format; }
+	[[nodiscard]] vk::Format GetSwapchainFormat() const noexcept { return m_swapchain_format; }
 
 	/// Notifies Reflex / PCL markers around presentation
 	void SetPresentMarker(bool start);
@@ -150,6 +156,7 @@ private:
 	bool                    m_dynamic_mfg_supported = false;
 	bool                    m_reflex_supported      = false;
 	uint32_t                m_presented_multiplier  = 1;
+	vk::Format              m_swapchain_format      = vk::Format::eUndefined;
 	void*                   m_last_frame_token      = nullptr;
 };
 

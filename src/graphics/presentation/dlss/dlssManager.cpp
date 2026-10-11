@@ -494,8 +494,16 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	if (m_fg_supported && m_settings.fg_enabled && m_settings.fg_mode != DLSSGMode::Off) {
 		sl::DLSSGOptions g_options {};
 		if (m_settings.fg_mode == DLSSGMode::MFG_Dynamic) {
-			g_options.mode = sl::DLSSGMode::eDynamic;
-			g_options.dynamicTargetFrameRate = 0.0f; // Auto-align with display refresh rate
+			if (m_dynamic_mfg_supported) {
+				g_options.mode = sl::DLSSGMode::eDynamic;
+				g_options.dynamicTargetFrameRate = 0.0f; // Auto-align with display refresh rate
+			} else {
+				// Dynamic MFG is D3D12-only in current Streamline; in Vulkan backend, use maximum supported multiplier
+				g_options.mode = sl::DLSSGMode::eOn;
+				g_options.numFramesToGenerate = (m_max_fg_frames > 1) ? (std::min)(m_max_fg_frames - 1, 3u) : 1u;
+				std::printf("[DLSS] Dynamic MFG is D3D12-only; falling back to fixed %ux multiplier for Vulkan\n",
+				            g_options.numFramesToGenerate + 1);
+			}
 		} else {
 			g_options.mode = sl::DLSSGMode::eOn;
 			if (m_settings.fg_mode == DLSSGMode::MFG_4X) {
@@ -510,7 +518,10 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 		g_options.numBackBuffers = 6;
 		g_options.colorWidth = target_extent.width;
 		g_options.colorHeight = target_extent.height;
-		g_options.colorBufferFormat = static_cast<uint32_t>(m_output_image.format);
+		const auto format_to_use = (m_swapchain_format != vk::Format::eUndefined)
+		                               ? static_cast<uint32_t>(m_swapchain_format)
+		                               : static_cast<uint32_t>(m_output_image.format);
+		g_options.colorBufferFormat = format_to_use;
 		g_options.mvecDepthWidth = input_extent.width;
 		g_options.mvecDepthHeight = input_extent.height;
 		g_options.mvecBufferFormat = static_cast<uint32_t>(m_fallback_mvec_image.format);
@@ -759,6 +770,14 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		return false;
 	}
 
+	// Reflex sleep and simulation/submit markers (required by Reflex & DLSS-G runtime)
+	if (m_reflex_supported) {
+		slReflexSleep(*frame_token);
+		slPCLSetMarker(sl::PCLMarker::eSimulationStart, *frame_token);
+		slPCLSetMarker(sl::PCLMarker::eSimulationEnd, *frame_token);
+		slPCLSetMarker(sl::PCLMarker::eRenderSubmitStart, *frame_token);
+	}
+
 	res = slSetTagForFrame(*frame_token, viewport, tags.data(), static_cast<uint32_t>(tags.size()), static_cast<sl::CommandBuffer*>(cmd_buffer));
 	if (res != sl::Result::eOk) {
 		LOGF("[DLSS] slSetTagForFrame failed: %d\n", static_cast<int>(res));
@@ -766,9 +785,14 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	}
 
 	sl::Constants constants {};
-	constants.jitterOffset = { 0.0f, 0.0f };
-	constants.mvecScale    = { 1.0f, 1.0f };
-	constants.reset        = (m_frame_counter <= 2 || extent_changed) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+	constants.jitterOffset        = { 0.0f, 0.0f };
+	constants.mvecScale           = { 1.0f, 1.0f };
+	constants.cameraPinholeOffset = { 0.0f, 0.0f };
+	constants.cameraPos           = { 0.0f, 0.0f, 0.0f };
+	constants.cameraUp            = { 0.0f, 1.0f, 0.0f };
+	constants.cameraRight         = { 1.0f, 0.0f, 0.0f };
+	constants.cameraFwd           = { 0.0f, 0.0f, 1.0f };
+	constants.reset               = (m_frame_counter <= 2 || extent_changed) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	constants.cameraMotionIncluded = sl::Boolean::eTrue;
 	constants.motionVectors3D      = sl::Boolean::eFalse;
 	constants.depthInverted        = sl::Boolean::eFalse;
@@ -807,15 +831,11 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		return false;
 	}
 
-	m_last_frame_token = frame_token;
-
-	// Query actual generated frames multiplier from DLSS-G state
-	if (m_fg_active) {
-		sl::DLSSGState fg_state {};
-		if (slDLSSGGetState(viewport, fg_state, nullptr) == sl::Result::eOk && fg_state.numFramesActuallyPresented > 0) {
-			m_presented_multiplier = fg_state.numFramesActuallyPresented;
-		}
+	if (m_reflex_supported) {
+		slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
 	}
+
+	m_last_frame_token = frame_token;
 
 	// Transition output image to eTransferSrcOptimal so swapchain blit/copy can read it
 	{
@@ -886,6 +906,26 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 	LOGF("[DLSS] DLSSManager shutdown complete\n");
 }
 
+uint32_t DLSSManager::GetRequestedMultiplier() const noexcept {
+	if (!m_settings.fg_enabled || !m_fg_active) {
+		return 1;
+	}
+	switch (m_settings.fg_mode) {
+		case DLSSGMode::MFG_4X: return 4;
+		case DLSSGMode::MFG_3X: return 3;
+		case DLSSGMode::FG_2X: return 2;
+		case DLSSGMode::MFG_Dynamic: return (m_max_fg_frames > 1) ? (std::min)(m_max_fg_frames, 4u) : 2u;
+		default: return 1;
+	}
+}
+
+uint32_t DLSSManager::GetEffectiveMultiplier() const noexcept {
+	if (!m_settings.fg_enabled || !m_fg_active) {
+		return 1;
+	}
+	return (m_presented_multiplier > 1) ? m_presented_multiplier : GetRequestedMultiplier();
+}
+
 std::string DLSSManager::GetOverlayInfo() const {
 	if (!m_settings.enabled && !m_settings.fg_enabled) {
 		return "DLSS: Off";
@@ -894,7 +934,8 @@ std::string DLSSManager::GetOverlayInfo() const {
 	if (st == DLSSStatus::Active) {
 		std::string fg_str;
 		if (m_settings.fg_enabled && m_fg_active) {
-			fg_str = fmt::format(" + {} ({}x)", DLSSGModeToString(m_settings.fg_mode), m_presented_multiplier);
+			const uint32_t mult = GetEffectiveMultiplier();
+			fg_str = fmt::format(" + {} ({}x)", DLSSGModeToString(m_settings.fg_mode), mult);
 		}
 		std::string reflex_str;
 		if (m_settings.fg_enabled || m_settings.reflex_mode != ReflexMode::Off) {
@@ -918,7 +959,32 @@ std::string DLSSManager::GetOverlayInfo() const {
 
 VkResult DLSSManager::QueuePresent(VkQueue queue, const VkPresentInfoKHR* presentInfo) {
 	if (m_pfn_vkQueuePresentKHR != nullptr) {
-		return m_pfn_vkQueuePresentKHR(queue, presentInfo);
+		const auto res = m_pfn_vkQueuePresentKHR(queue, presentInfo);
+		if (m_fg_active) {
+			sl::ViewportHandle viewport(m_viewport_id);
+			sl::DLSSGState fg_state {};
+			if (slDLSSGGetState(viewport, fg_state, nullptr) == sl::Result::eOk) {
+				if (fg_state.numFramesActuallyPresented > 0) {
+					m_presented_multiplier = fg_state.numFramesActuallyPresented;
+				}
+				if (fg_state.status != sl::DLSSGStatus::eOk) {
+					static uint32_t s_last_status = 0;
+					const uint32_t cur_status = static_cast<uint32_t>(fg_state.status);
+					if (cur_status != s_last_status) {
+						s_last_status = cur_status;
+						std::printf("[DLSS][Warn] DLSS-G Runtime Status: 0x%X (", cur_status);
+						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailResolutionTooLow)) std::printf("ResolutionTooLow ");
+						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailReflexNotDetectedAtRuntime)) std::printf("ReflexNotDetected ");
+						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailHDRFormatNotSupported)) std::printf("HDRNotSupported ");
+						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailCommonConstantsInvalid)) std::printf("CommonConstantsInvalid ");
+						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailGetCurrentBackBufferIndexNotCalled)) std::printf("GetBackBufferNotCalled ");
+						std::printf(")\n");
+						std::fflush(stdout);
+					}
+				}
+			}
+		}
+		return res;
 	}
 	return VK_ERROR_INITIALIZATION_FAILED;
 }
