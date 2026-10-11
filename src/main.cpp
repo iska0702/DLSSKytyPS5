@@ -153,6 +153,7 @@ static void PrintUsage() {
 	::printf("  --dlss-fg                           Enable DLSS Frame Generation (2x frame multiplier).\n");
 	::printf("  --dlss-mfg <3x|4x|dynamic>          Enable Multi-Frame Generation (3x, 4x, or dynamic).\n");
 	::printf("  --reflex <on|boost|off>             NVIDIA Reflex Low Latency mode. Default: on.\n");
+	::printf("  --directstorage                     Enable DirectStorage + Vulkan (Experimental).\n");
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	::printf("  --redzone                            Protect the guest SysV red zone.\n");
 #endif
@@ -366,6 +367,16 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 					i++;
 				}
 			}
+			continue;
+		}
+
+		if (arg == "--directstorage") {
+			options.config.directstorage_enabled = true;
+			continue;
+		}
+
+		if (arg == "--no-directstorage" || arg == "--directstorage=off" || arg == "--directstorage=false") {
+			options.config.directstorage_enabled = false;
 			continue;
 		}
 
@@ -667,6 +678,11 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 				options.config.reflex_mode = 0;
 			} else {
 				::printf("invalid reflex mode (expected on, boost, off): %s\n", value.c_str());
+				return false;
+			}
+		} else if (arg == "--directstorage") {
+			if (!ParseBool(value, options.config.directstorage_enabled)) {
+				::printf("invalid boolean for %s: %s\n", arg.c_str(), value.c_str());
 				return false;
 			}
 		} else {

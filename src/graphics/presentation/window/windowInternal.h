@@ -53,6 +53,27 @@ private:
 	vk::Pipeline            m_pipeline    = nullptr;
 };
 
+class CasFilter final {
+public:
+	CasFilter()  = default;
+	~CasFilter() = default;
+	KYTY_CLASS_NO_COPY(CasFilter);
+
+	// Applies AMD FidelityFX Contrast Adaptive Sharpening (CAS / RCAS) from source_view to target_view.
+	// Supports simultaneous stretching/upscaling and contrast-adaptive detail reconstruction based on sharpness [0.0 .. 1.0].
+	void Record(vk::Device device, vk::CommandBuffer command, vk::ImageView source_view,
+	            vk::Extent2D source, vk::ImageView target_view, vk::Format target_format,
+	            vk::Extent2D target, float sharpness);
+	void Release(vk::Device device);
+
+private:
+	vk::Format              m_format      = vk::Format::eUndefined;
+	vk::Sampler             m_sampler     = nullptr;
+	vk::DescriptorSetLayout m_descriptors = nullptr;
+	vk::PipelineLayout      m_layout      = nullptr;
+	vk::Pipeline            m_pipeline    = nullptr;
+};
+
 struct WindowLoopState {
 	SDL_Event        event {};
 	bool             need_exit = false;

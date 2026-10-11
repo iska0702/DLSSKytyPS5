@@ -9,6 +9,7 @@
 #include <sl_dlss_g.h>
 #include <sl_reflex.h>
 #include <sl_pcl.h>
+#include <sl_nis.h>
 #include <sl_helpers_vk.h>
 
 #include <algorithm>
@@ -125,9 +126,10 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 		sl::kFeatureDLSS_G,
 		sl::kFeatureReflex,
 		sl::kFeaturePCL,
+		sl::kFeatureNIS,
 	};
 	pref.featuresToLoad = features;
-	pref.numFeaturesToLoad = 4;
+	pref.numFeaturesToLoad = 5;
 	pref.renderAPI = sl::RenderAPI::eVulkan;
 	pref.applicationId = 0x505335; // 'PS5' custom application ID
 	pref.engine = sl::EngineType::eCustom;
@@ -202,10 +204,15 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	vk_info.computeQueueIndex = host_queues;
 	vk_info.graphicsQueueFamily = graphics.queue_family;
 	vk_info.graphicsQueueIndex = host_queues + compute_queues_reserved;
+	// Direct Optical Flow queue mapping for hardware-accelerated Frame Generation (NVIDIA Ada/Blackwell)
+	vk_info.opticalFlowQueueFamily = graphics.queue_family;
+	vk_info.opticalFlowQueueIndex = host_queues;
+	vk_info.useNativeOpticalFlowMode = false;
 
-	std::printf("[DLSS] Configuring Streamline Vulkan queues: host queues=%u, computeQueue=(family %u, index %u), graphicsQueue=(family %u, index %u)\n",
+	std::printf("[DLSS] Configuring Streamline Vulkan queues: host queues=%u, computeQueue=(family %u, index %u), graphicsQueue=(family %u, index %u), opticalFlow=(family %u, index %u)\n",
 	            host_queues, vk_info.computeQueueFamily, vk_info.computeQueueIndex,
-	            vk_info.graphicsQueueFamily, vk_info.graphicsQueueIndex);
+	            vk_info.graphicsQueueFamily, vk_info.graphicsQueueIndex,
+	            vk_info.opticalFlowQueueFamily, vk_info.opticalFlowQueueIndex);
 	std::fflush(stdout);
 
 	res = slSetVulkanInfo(vk_info);
@@ -268,6 +275,15 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	            static_cast<int>(reflex_res), reflex_loaded ? 1 : 0);
 
 	slSetFeatureLoaded(sl::kFeaturePCL, true);
+
+	// Check NVIDIA Image Scaling (NIS) sharpness support
+	slSetFeatureLoaded(sl::kFeatureNIS, true);
+	bool nis_loaded = false;
+	slIsFeatureLoaded(sl::kFeatureNIS, nis_loaded);
+	sl::Result nis_res = slIsFeatureSupported(sl::kFeatureNIS, adapter_info);
+	m_nis_supported = (nis_res == sl::Result::eOk || nis_loaded);
+	std::printf("[DLSS] NVIDIA Image Scaling (NIS / Sharpness) support: %d, loaded: %d\n",
+	            static_cast<int>(nis_res), nis_loaded ? 1 : 0);
 
 	// Query Frame Generation / Multi-Frame Generation capabilities
 	sl::ViewportHandle viewport(m_viewport_id);
@@ -473,8 +489,12 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	// Auto-detect optimal DLSS mode based on the ratio of input render resolution to target output resolution
 	m_effective_mode = m_settings.mode;
 	if (input_extent.width > 0 && target_extent.width > 0 && m_settings.mode != DLSSMode::Off) {
-		const float scale = static_cast<float>(input_extent.width) / static_cast<float>(target_extent.width);
-		if (scale >= 0.95f) {
+		const float scale_x = static_cast<float>(input_extent.width) / static_cast<float>(target_extent.width);
+		const float scale_y = static_cast<float>(input_extent.height) / static_cast<float>(target_extent.height);
+		const float scale = (std::min)(scale_x, scale_y);
+
+		// DLAA is strictly for 1:1 input to output resolution (both dimensions matching)
+		if (input_extent.width == target_extent.width && input_extent.height == target_extent.height) {
 			m_effective_mode = DLSSMode::DLAA;
 		} else if (scale >= 0.62f) { // ~67% Quality
 			m_effective_mode = DLSSMode::Quality;
@@ -538,6 +558,7 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 		g_options.mvecDepthHeight = input_extent.height;
 		g_options.mvecBufferFormat = static_cast<uint32_t>(m_fallback_mvec_image.format);
 		g_options.depthBufferFormat = static_cast<uint32_t>(m_fallback_depth_image.format);
+		g_options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
 
 		sl::Result g_res = slDLSSGSetOptions(viewport, g_options);
 		m_fg_active = (g_res == sl::Result::eOk);
@@ -568,6 +589,21 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 		slReflexSetOptions(reflex_options);
 	}
 
+	// Configure NVIDIA Image Scaling (NIS) for post-sharpening
+	if (m_nis_supported) {
+		sl::NISOptions nis_options {};
+		if (m_settings.sharpness > 0.001f) {
+			// Mode eSharpen applies directional sharpening without scaling
+			nis_options.mode = sl::NISMode::eSharpen;
+			nis_options.hdrMode = sl::NISHDR::eNone;
+			nis_options.sharpness = std::clamp(m_settings.sharpness, 0.0f, 1.0f);
+		} else {
+			nis_options.mode = sl::NISMode::eOff;
+			nis_options.sharpness = 0.0f;
+		}
+		slNISSetOptions(viewport, nis_options);
+	}
+
 	sl::DLSSOptimalSettings opt {};
 	if (slDLSSGetOptimalSettings(dlss_options, opt) == sl::Result::eOk) {
 		Log::WriteToConsoleAndLog(fmt::format(
@@ -591,7 +627,9 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffer,
                            VulkanImage& source_image, vk::ImageView source_view,
                            vk::Extent2D source_extent, vk::Extent2D target_extent,
-                           VulkanImage*& out_upscaled_image) {
+                           VulkanImage*& out_upscaled_image,
+                           vk::Image backbuffer_image,
+                           vk::ImageView backbuffer_view) {
 	out_upscaled_image = nullptr;
 
 	if (!m_settings.enabled || !m_available || !m_streamline_loaded) {
@@ -776,16 +814,38 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	mvec_res.arrayLayers = 1;
 	mvec_res.usage = static_cast<uint32_t>(m_fallback_mvec_image.usage);
 
+	// Define explicit input and output view extents so Streamline knows the exact scaling rectangle
+	const sl::Extent in_extent { 0, 0, source_extent.width, source_extent.height };
+	const sl::Extent out_extent { 0, 0, target_extent.width, target_extent.height };
+
 	std::vector<sl::ResourceTag> tags;
-	tags.emplace_back(&in_color_res, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate);
+	tags.emplace_back(&in_color_res, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &in_extent);
 	tags.emplace_back(&out_color_res, sl::kBufferTypeScalingOutputColor,
-	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate);
+	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate, &out_extent);
 	tags.emplace_back(&depth_res, sl::kBufferTypeDepth,
-	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate);
+	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate, &in_extent);
 	tags.emplace_back(&mvec_res, sl::kBufferTypeMotionVectors,
-	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate);
+	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate, &in_extent);
 	if (m_fg_active) {
-		tags.emplace_back(&out_color_res, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent);
+		tags.emplace_back(&out_color_res, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &out_extent);
+	}
+
+	sl::Resource backbuffer_res(sl::ResourceType::eTex2d, nullptr, nullptr, nullptr, 0);
+	if (backbuffer_image != nullptr && backbuffer_view != nullptr) {
+		backbuffer_res = sl::Resource(sl::ResourceType::eTex2d,
+		                              static_cast<void*>(static_cast<VkImage>(backbuffer_image)),
+		                              nullptr,
+		                              static_cast<void*>(static_cast<VkImageView>(backbuffer_view)),
+		                              static_cast<uint32_t>(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
+		backbuffer_res.width = target_extent.width;
+		backbuffer_res.height = target_extent.height;
+		backbuffer_res.nativeFormat = (m_swapchain_format != vk::Format::eUndefined)
+		                                  ? static_cast<uint32_t>(m_swapchain_format)
+		                                  : static_cast<uint32_t>(m_output_image.format);
+		backbuffer_res.mipLevels = 1;
+		backbuffer_res.arrayLayers = 1;
+		backbuffer_res.internalFlags = sl::Resource::eVulkanSwapChainImage;
+		tags.emplace_back(&backbuffer_res, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &out_extent);
 	}
 
 	sl::ViewportHandle viewport(m_viewport_id);
@@ -856,12 +916,18 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 			m_status = DLSSStatus::Error;
 			m_status_message = fmt::format("slEvaluateFeature failed: {}", static_cast<int>(res));
 			Log::WriteToConsoleAndLog(fmt::format("[DLSS] {}\n", m_status_message));
+			// Reset resource cache so that the next frame reconfigures DLSS cleanly
+			m_applied_mode = DLSSMode::Off;
+			m_output_extent = {};
 			return false;
 		}
 
 		if (m_reflex_supported) {
 			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
 		}
+
+		// When DLSS Super Resolution is active, DLSS handles upscaling to target_extent.
+		// (NIS operates on kBufferTypeScalingInputColor and would overwrite DLSS output if run concurrently).
 
 		m_last_frame_token = frame_token;
 

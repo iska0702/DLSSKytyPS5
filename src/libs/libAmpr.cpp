@@ -14,6 +14,7 @@
 #include "libs/errno.h"
 #include "libs/libs.h"
 #include "loader/symbolDatabase.h"
+#include "graphics/directstorage/directStorageManager.h"
 
 #include <algorithm>
 #include <array>
@@ -1988,6 +1989,22 @@ static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offse
 	}
 	if (!AprShared::IsValidGuestRange(destination, size, true)) {
 		return LibKernel::KERNEL_ERROR_EFAULT;
+	}
+
+	// Try DirectStorage fast-path if enabled and available
+	auto& ds = Graphics::DirectStorageIntegration::DirectStorageManager::Instance();
+	if (ds.IsEnabled() && ds.IsAvailable()) {
+		uint64_t ds_read = 0;
+		if (ds.LoadFileToHostMemory(std::filesystem::path(host_path), file_offset,
+		                            reinterpret_cast<void*>(destination), size, &ds_read)) {
+			*bytes_read = ds_read;
+			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprHostReadBytes, ds_read);
+			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprGuestCopiedBytes, ds_read);
+			if (ds_read < size) {
+				Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprShortReads);
+			}
+			return OK;
+		}
 	}
 
 	Common::File file;

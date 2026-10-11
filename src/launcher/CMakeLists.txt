@@ -46,10 +46,29 @@ add_dependencies(launcher kyty_emulator)
 
 if(KYTY_CLANG_CL)
 	add_custom_command(TARGET launcher POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:kyty_emulator> $<TARGET_FILE_DIR:launcher>/$<TARGET_FILE_NAME:kyty_emulator>
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_PDB_FILE:kyty_emulator> $<TARGET_FILE_DIR:launcher>/$<TARGET_PDB_FILE_NAME:kyty_emulator>
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:kyty_emulator>/${KYTY_EMULATOR_MAP_NAME} $<TARGET_FILE_DIR:launcher>/${KYTY_EMULATOR_MAP_NAME}
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KYTY_THIRD_PARTY_DIR}/winpthread/bin/libwinpthread-1.dll" $<TARGET_FILE_DIR:launcher>/libwinpthread-1.dll
 	)
+endif()
+
+set(DIRECTSTORAGE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../3rdparty/DirectStorage")
+if(WIN32 AND EXISTS "${DIRECTSTORAGE_SDK_DIR}")
+	set(DIRECTSTORAGE_BIN_DIR "${DIRECTSTORAGE_SDK_DIR}/bin/x64")
+	set(DIRECTSTORAGE_DLLS
+		"${DIRECTSTORAGE_BIN_DIR}/dstorage.dll"
+		"${DIRECTSTORAGE_BIN_DIR}/dstoragecore.dll"
+	)
+	foreach(dll ${DIRECTSTORAGE_DLLS})
+		if(EXISTS "${dll}")
+			get_filename_component(dll_name "${dll}" NAME)
+			add_custom_command(TARGET launcher POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${dll}" "$<TARGET_FILE_DIR:launcher>/${dll_name}"
+			)
+		endif()
+	endforeach()
 endif()
 
 set(STREAMLINE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../streamline-sdk-v2.14.1")

@@ -44,6 +44,7 @@ private:
 	bool                         m_has_nvidia_rtx         = false;
 	bool                         m_has_nvidia_fg          = false;
 	bool                         m_has_nvidia_mfg         = false;
+	class QCheckBox*             m_directstorage_checkbox = nullptr;
 
 	void UpdateDLSSUI();
 

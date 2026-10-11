@@ -327,6 +327,8 @@ file(GLOB kyty_emulator_src CONFIGURE_DEPENDS
 	"${KYTY_SOURCE_DIR}/graphics/presentation/window/*.h"
 	"${KYTY_SOURCE_DIR}/graphics/presentation/dlss/*.cpp"
 	"${KYTY_SOURCE_DIR}/graphics/presentation/dlss/*.h"
+	"${KYTY_SOURCE_DIR}/graphics/directstorage/*.cpp"
+	"${KYTY_SOURCE_DIR}/graphics/directstorage/*.h"
 	"${KYTY_SOURCE_DIR}/kernel/*.cpp"
 	"${KYTY_SOURCE_DIR}/kernel/*.h"
 	"${KYTY_SOURCE_DIR}/loader/*.cpp"
@@ -443,6 +445,7 @@ set(gpu_blit_shader_sources
 	"${gpu_tiler_shader_dir}/gpu_blit_color32_to_depth.frag"
 	"${gpu_tiler_shader_dir}/gpu_video_out_overlay.frag"
 	"${gpu_tiler_shader_dir}/gpu_video_out_downscale.frag"
+	"${gpu_tiler_shader_dir}/gpu_video_out_cas.frag"
 )
 foreach(shader_source IN LISTS gpu_blit_shader_sources)
 	get_filename_component(shader_name "${shader_source}" NAME_WE)
@@ -578,6 +581,16 @@ if(EXISTS "${STREAMLINE_SDK_DIR}")
 	if(WIN32)
 		list(APPEND kyty_emulator_link_libraries "${STREAMLINE_SDK_DIR}/lib/x64/sl.interposer.lib")
 	endif()
+endif()
+
+set(DIRECTSTORAGE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/DirectStorage")
+if(WIN32 AND EXISTS "${DIRECTSTORAGE_SDK_DIR}")
+	list(APPEND inc_headers "${DIRECTSTORAGE_SDK_DIR}/include")
+	list(APPEND kyty_emulator_link_libraries
+		"${DIRECTSTORAGE_SDK_DIR}/lib/x64/dstorage.lib"
+		d3d12.lib
+		dxgi.lib
+	)
 endif()
 
 if (KYTY_CLANG_CL)
@@ -1011,6 +1024,7 @@ target_sources(shader_recompiler_compute_tests PRIVATE
 
 add_kyty_full_emulator_test(virtual_memory_allocation_tests "${KYTY_TESTS_DIR}/VirtualMemoryAllocationTests.cpp")
 add_kyty_full_emulator_test(repeat_trace_tests "${KYTY_TESTS_DIR}/RepeatTraceTests.cpp")
+add_kyty_full_emulator_test(directstorage_tests "${KYTY_TESTS_DIR}/DirectStorageTests.cpp")
 target_compile_definitions(virtual_memory_allocation_tests PRIVATE
 	KYTY_VIRTUAL_MEMORY_ALLOCATION_TESTS=1)
 
@@ -1152,6 +1166,7 @@ if(BUILD_TESTING)
 	add_test(NAME ces COMMAND $<TARGET_FILE:ces_tests>)
 	add_test(NAME save_data_dialog COMMAND $<TARGET_FILE:save_data_dialog_tests>)
 	add_test(NAME http_uri_parse COMMAND $<TARGET_FILE:http_uri_parse_tests>)
+	add_test(NAME directstorage COMMAND $<TARGET_FILE:directstorage_tests>)
 	add_test(NAME shader_recompiler_compute COMMAND $<TARGET_FILE:shader_recompiler_compute_tests>)
 	add_test(NAME shader_recompiler_alignbyte
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --alignbyte-only)
@@ -2129,6 +2144,7 @@ if(BUILD_TESTING)
 		ces_tests
 		save_data_dialog_tests
 		http_uri_parse_tests
+		directstorage_tests
 	)
 endif()
 
@@ -2224,6 +2240,23 @@ if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
 	endforeach()
 endif()
 
+if(WIN32 AND EXISTS "${DIRECTSTORAGE_SDK_DIR}")
+	set(DIRECTSTORAGE_BIN_DIR "${DIRECTSTORAGE_SDK_DIR}/bin/x64")
+	set(DIRECTSTORAGE_DLLS
+		"${DIRECTSTORAGE_BIN_DIR}/dstorage.dll"
+		"${DIRECTSTORAGE_BIN_DIR}/dstoragecore.dll"
+	)
+	foreach(dll ${DIRECTSTORAGE_DLLS})
+		if(EXISTS "${dll}")
+			get_filename_component(dll_name "${dll}" NAME)
+			add_custom_command(TARGET kyty_emulator POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${dll}" "$<TARGET_FILE_DIR:kyty_emulator>/${dll_name}"
+			)
+		endif()
+	endforeach()
+endif()
+
 if(LINUX)
     target_link_options(kyty_emulator PRIVATE
         $<$<CONFIG:Release>:-Wl,--strip-all>
@@ -2259,6 +2292,13 @@ if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
 		"${STREAMLINE_SDK_DIR}/bin/x64/sl.common.dll"
 		"${STREAMLINE_SDK_DIR}/bin/x64/sl.dlss.dll"
 		"${STREAMLINE_SDK_DIR}/bin/x64/nvngx_dlss.dll"
+		DESTINATION .
+	)
+endif()
+if(WIN32 AND EXISTS "${DIRECTSTORAGE_SDK_DIR}")
+	install(FILES
+		"${DIRECTSTORAGE_SDK_DIR}/bin/x64/dstorage.dll"
+		"${DIRECTSTORAGE_SDK_DIR}/bin/x64/dstoragecore.dll"
 		DESTINATION .
 	)
 endif()

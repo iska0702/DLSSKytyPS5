@@ -7,6 +7,7 @@
 #include "gpu_blit_shaders/gpu_blit_fs_triangle_spv.h"
 #include "gpu_blit_shaders/gpu_video_out_downscale_spv.h"
 #include "gpu_blit_shaders/gpu_video_out_overlay_spv.h"
+#include "gpu_blit_shaders/gpu_video_out_cas_spv.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -312,6 +313,7 @@ private:
 	vk::Pipeline                   m_overlay_pipeline    = nullptr;
 	vk::Sampler                    m_overlay_sampler     = nullptr;
 	PresentFilter                  m_filter; // KYTY_PRESENT_BOX_DOWNSCALE
+	CasFilter                      m_cas;
 	uint32_t                       m_image_index         = static_cast<uint32_t>(-1);
 	uint32_t                       m_frame_index         = 0;
 };
@@ -596,6 +598,7 @@ void Swapchain::Destroy() {
 	m_overlay_descriptors = nullptr;
 	m_overlay_sampler     = nullptr;
 	m_filter.Release(graphics.device);
+	m_cas.Release(graphics.device);
 	DLSSManager::Instance().ReleaseResources(graphics);
 
 	for (const auto semaphore: m_image_acquired) {
@@ -918,6 +921,103 @@ void PresentFilter::Release(vk::Device device) {
 	m_format      = vk::Format::eUndefined;
 }
 
+void CasFilter::Record(vk::Device device, vk::CommandBuffer command, vk::ImageView source_view,
+                       vk::Extent2D source, vk::ImageView target_view,
+                       vk::Format target_format, vk::Extent2D target, float sharpness) {
+	struct CasConstants {
+		int32_t size[2];
+		float   scale[2];
+		float   sharpness;
+		int32_t dummy;
+	};
+	static_assert(sizeof(CasConstants) == 24);
+	if (m_layout == nullptr) {
+		vk::SamplerCreateInfo sampler {};
+		sampler.magFilter    = vk::Filter::eLinear;
+		sampler.minFilter    = vk::Filter::eLinear;
+		sampler.mipmapMode   = vk::SamplerMipmapMode::eNearest;
+		sampler.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+		sampler.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+		sampler.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+		sampler.maxLod       = VK_LOD_CLAMP_NONE;
+		RequireVulkanSuccess(device.createSampler(&sampler, nullptr, &m_sampler),
+		                     "create video-out cas sampler");
+		const vk::DescriptorSetLayoutBinding binding {0, vk::DescriptorType::eCombinedImageSampler,
+		                                              1, vk::ShaderStageFlagBits::eFragment};
+		vk::DescriptorSetLayoutCreateInfo    descriptors {};
+		descriptors.flags        = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR;
+		descriptors.bindingCount = 1;
+		descriptors.pBindings    = &binding;
+		RequireVulkanSuccess(device.createDescriptorSetLayout(&descriptors, nullptr, &m_descriptors),
+		                     "create video-out cas descriptor layout");
+		const vk::PushConstantRange  constants {vk::ShaderStageFlagBits::eFragment, 0,
+		                                        sizeof(CasConstants)};
+		vk::PipelineLayoutCreateInfo layout {};
+		layout.setLayoutCount         = 1;
+		layout.pSetLayouts            = &m_descriptors;
+		layout.pushConstantRangeCount = 1;
+		layout.pPushConstantRanges    = &constants;
+		RequireVulkanSuccess(device.createPipelineLayout(&layout, nullptr, &m_layout),
+		                     "create video-out cas pipeline layout");
+	}
+	if (m_pipeline != nullptr && m_format != target_format) {
+		device.destroyPipeline(m_pipeline, nullptr);
+		m_pipeline = nullptr;
+	}
+	if (m_pipeline == nullptr) {
+		m_pipeline = CreateFullscreenPipeline(device, m_layout, GPU_VIDEO_OUT_CAS_SPV, target_format);
+		m_format   = target_format;
+	}
+
+	const vk::DescriptorImageInfo image {m_sampler, source_view,
+	                                     vk::ImageLayout::eShaderReadOnlyOptimal};
+	vk::WriteDescriptorSet        write {};
+	write.dstBinding      = 0;
+	write.descriptorCount = 1;
+	write.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
+	write.pImageInfo      = &image;
+	command.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, m_layout, 0, 1, &write);
+	const CasConstants constants {
+	    {static_cast<int32_t>(source.width), static_cast<int32_t>(source.height)},
+	    {static_cast<float>(source.width) / static_cast<float>(target.width),
+	     static_cast<float>(source.height) / static_cast<float>(target.height)},
+	    sharpness,
+	    0};
+	command.pushConstants(m_layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(constants),
+	                      &constants);
+	command.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+	vk::RenderingAttachmentInfo attachment {};
+	attachment.imageView   = target_view;
+	attachment.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+	attachment.loadOp      = vk::AttachmentLoadOp::eDontCare;
+	attachment.storeOp     = vk::AttachmentStoreOp::eStore;
+	vk::RenderingInfo rendering {};
+	rendering.renderArea.extent    = target;
+	rendering.layerCount           = 1;
+	rendering.colorAttachmentCount = 1;
+	rendering.pColorAttachments    = &attachment;
+	command.beginRendering(&rendering);
+	const vk::Viewport viewport {
+	    0.0f, 0.0f, static_cast<float>(target.width), static_cast<float>(target.height), 0.0f, 1.0f};
+	const vk::Rect2D scissor {{0, 0}, target};
+	command.setViewport(0, 1, &viewport);
+	command.setScissor(0, 1, &scissor);
+	command.draw(3, 1, 0, 0);
+	command.endRendering();
+}
+
+void CasFilter::Release(vk::Device device) {
+	device.destroyPipeline(m_pipeline, nullptr);
+	device.destroyPipelineLayout(m_layout, nullptr);
+	device.destroyDescriptorSetLayout(m_descriptors, nullptr);
+	device.destroySampler(m_sampler, nullptr);
+	m_pipeline    = nullptr;
+	m_layout      = nullptr;
+	m_descriptors = nullptr;
+	m_sampler     = nullptr;
+	m_format      = vk::Format::eUndefined;
+}
+
 void Swapchain::DrawOverlay(vk::CommandBuffer command, const Presenter::Layer& layer) {
 	auto device = m_window.graphic_ctx.device;
 	if (m_overlay_pipeline == nullptr) {
@@ -1071,18 +1171,35 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 			    m_window.graphic_ctx.device.createImageView(&view, nullptr, &source->view),
 			    "create presentation source view");
 		}
-		source->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
-		                vk::AccessFlagBits2::eShaderRead);
+		vk::Image     curr_backbuffer_img  = (m_image_index < m_images.size()) ? m_images[m_image_index] : nullptr;
+		vk::ImageView curr_backbuffer_view = (m_image_index < m_image_views.size()) ? m_image_views[m_image_index] : nullptr;
 		dlss_evaluated = DLSSManager::Instance().Evaluate(m_window.graphic_ctx, vk_command,
 		                                                  source->image, source->view,
 		                                                  source_extent, m_extent,
-		                                                  dlss_upscaled_image);
+		                                                  dlss_upscaled_image,
+		                                                  curr_backbuffer_img,
+		                                                  curr_backbuffer_view);
 	}
 
-	const bool filtered = !dlss_evaluated && source != nullptr && PresentBoxDownscaleEnabled() &&
-	                      PresentNeedsFilter(source_extent, m_extent);
-	if (!dlss_evaluated) {
-		if (filtered) {
+	static uint32_t s_present_stat_counter = 0;
+	if (++s_present_stat_counter % 300 == 1 && source != nullptr) {
+		Log::WriteToConsoleAndLog(fmt::format(
+			"[Present] Frame {}: Source {}x{} -> Swapchain {}x{}, DLSS Evaluated: {}, CAS Filter: {}\n",
+			s_present_stat_counter, source_extent.width, source_extent.height,
+			m_extent.width, m_extent.height, dlss_evaluated ? "YES" : "NO",
+			(dlss_evaluated || (Config::GetDLSSSharpness() > 0.001f)) ? "YES" : "NO"));
+	}
+
+	const float raw_sharpness = Config::GetDLSSSharpness();
+	const float sharpness     = (raw_sharpness > 0.001f) ? raw_sharpness : 0.45f;
+	const bool  use_cas       = dlss_evaluated || (raw_sharpness > 0.001f);
+	const bool  filtered      = !dlss_evaluated && source != nullptr && !use_cas &&
+	                            PresentBoxDownscaleEnabled() && PresentNeedsFilter(source_extent, m_extent);
+	const bool  renders_to_attachment = (dlss_evaluated && use_cas) || filtered ||
+	                                    (!dlss_evaluated && source != nullptr && use_cas);
+
+	if (!dlss_evaluated && source != nullptr) {
+		if (filtered || use_cas) {
 			if (source->view == nullptr) {
 				vk::ImageViewCreateInfo view {};
 				view.image            = source->image.image;
@@ -1095,7 +1212,7 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 			}
 			source->Transit(vk_command, vk::ImageLayout::eShaderReadOnlyOptimal,
 			                vk::AccessFlagBits2::eShaderRead);
-		} else if (source != nullptr) {
+		} else {
 			source->Transit(vk_command, vk::ImageLayout::eTransferSrcOptimal,
 			                vk::AccessFlagBits2::eTransferRead);
 		}
@@ -1107,11 +1224,11 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 
 	vk::ImageMemoryBarrier to_transfer {};
 	to_transfer.sType = vk::StructureType::eImageMemoryBarrier;
-	to_transfer.dstAccessMask =
-	    filtered ? vk::AccessFlagBits::eColorAttachmentWrite : vk::AccessFlagBits::eTransferWrite;
+	to_transfer.dstAccessMask = renders_to_attachment ? vk::AccessFlagBits::eColorAttachmentWrite
+	                                                  : vk::AccessFlagBits::eTransferWrite;
 	to_transfer.oldLayout = vk::ImageLayout::eUndefined;
-	to_transfer.newLayout =
-	    filtered ? vk::ImageLayout::eColorAttachmentOptimal : vk::ImageLayout::eTransferDstOptimal;
+	to_transfer.newLayout = renders_to_attachment ? vk::ImageLayout::eColorAttachmentOptimal
+	                                              : vk::ImageLayout::eTransferDstOptimal;
 	to_transfer.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
 	to_transfer.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
 	to_transfer.image                           = m_images[m_image_index];
@@ -1121,33 +1238,57 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	to_transfer.subresourceRange.baseArrayLayer = 0;
 	to_transfer.subresourceRange.layerCount     = 1;
 	// Match the acquire wait stage so the layout transition cannot precede acquisition.
-	const auto write_stage = filtered ? vk::PipelineStageFlagBits::eColorAttachmentOutput
-	                                  : vk::PipelineStageFlagBits::eTransfer;
+	const auto write_stage = renders_to_attachment ? vk::PipelineStageFlagBits::eColorAttachmentOutput
+	                                               : vk::PipelineStageFlagBits::eTransfer;
 	vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, write_stage,
 	                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_transfer);
 
 	if (dlss_evaluated && dlss_upscaled_image != nullptr) {
-		vk::ImageBlit region {};
-		region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
-		region.srcSubresource.mipLevel       = 0;
-		region.srcSubresource.baseArrayLayer = 0;
-		region.srcSubresource.layerCount     = 1;
-		region.srcOffsets[1].x               = static_cast<int>(m_extent.width);
-		region.srcOffsets[1].y               = static_cast<int>(m_extent.height);
-		region.srcOffsets[1].z               = 1;
-		region.dstSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
-		region.dstSubresource.mipLevel       = 0;
-		region.dstSubresource.baseArrayLayer = 0;
-		region.dstSubresource.layerCount     = 1;
-		region.dstOffsets[1].x               = static_cast<int>(m_extent.width);
-		region.dstOffsets[1].y               = static_cast<int>(m_extent.height);
-		region.dstOffsets[1].z               = 1;
-		vk_command.blitImage(dlss_upscaled_image->image, vk::ImageLayout::eTransferSrcOptimal,
-		                     m_images[m_image_index], vk::ImageLayout::eTransferDstOptimal, 1,
-		                     &region, vk::Filter::eLinear);
+		if (use_cas) {
+			vk::ImageMemoryBarrier to_shader {};
+			to_shader.sType               = vk::StructureType::eImageMemoryBarrier;
+			to_shader.oldLayout           = vk::ImageLayout::eTransferSrcOptimal;
+			to_shader.newLayout           = vk::ImageLayout::eShaderReadOnlyOptimal;
+			to_shader.srcAccessMask       = vk::AccessFlagBits::eTransferRead;
+			to_shader.dstAccessMask       = vk::AccessFlagBits::eShaderRead;
+			to_shader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_shader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_shader.image               = dlss_upscaled_image->image;
+			to_shader.subresourceRange    = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+			vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+			                           vk::PipelineStageFlagBits::eFragmentShader,
+			                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_shader);
+
+			m_cas.Record(m_window.graphic_ctx.device, vk_command,
+			             DLSSManager::Instance().GetOutputView(),
+			             vk::Extent2D {dlss_upscaled_image->extent.width, dlss_upscaled_image->extent.height},
+			             m_image_views[m_image_index], m_format, m_extent, sharpness);
+		} else {
+			vk::ImageBlit region {};
+			region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+			region.srcSubresource.mipLevel       = 0;
+			region.srcSubresource.baseArrayLayer = 0;
+			region.srcSubresource.layerCount     = 1;
+			region.srcOffsets[1].x               = static_cast<int>(dlss_upscaled_image->extent.width);
+			region.srcOffsets[1].y               = static_cast<int>(dlss_upscaled_image->extent.height);
+			region.srcOffsets[1].z               = 1;
+			region.dstSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+			region.dstSubresource.mipLevel       = 0;
+			region.dstSubresource.baseArrayLayer = 0;
+			region.dstSubresource.layerCount     = 1;
+			region.dstOffsets[1].x               = static_cast<int>(m_extent.width);
+			region.dstOffsets[1].y               = static_cast<int>(m_extent.height);
+			region.dstOffsets[1].z               = 1;
+			vk_command.blitImage(dlss_upscaled_image->image, vk::ImageLayout::eTransferSrcOptimal,
+			                     m_images[m_image_index], vk::ImageLayout::eTransferDstOptimal, 1,
+			                     &region, vk::Filter::eLinear);
+		}
 	} else if (filtered) {
 		m_filter.Record(m_window.graphic_ctx.device, vk_command, source->view, 0, source_extent,
 		                m_image_views[m_image_index], m_format, m_extent);
+	} else if (source != nullptr && use_cas) {
+		m_cas.Record(m_window.graphic_ctx.device, vk_command, source->view,
+		             source_extent, m_image_views[m_image_index], m_format, m_extent, sharpness);
 	} else if (source != nullptr) {
 		vk::ImageBlit region {};
 		region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
@@ -1169,14 +1310,16 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 		                     &region, vk::Filter::eLinear);
 	} else {
 		const vk::ClearColorValue black {};
-		vk_command.clearColorImage(m_images[m_image_index], vk::ImageLayout::eTransferDstOptimal,
+		vk_command.clearColorImage(m_images[m_image_index],
+		                           renders_to_attachment ? vk::ImageLayout::eColorAttachmentOptimal
+		                                                 : vk::ImageLayout::eTransferDstOptimal,
 		                           &black, 1, &to_transfer.subresourceRange);
 	}
 
 	vk::ImageMemoryBarrier to_present {};
 	to_present.sType               = vk::StructureType::eImageMemoryBarrier;
-	to_present.srcAccessMask =
-	    filtered ? vk::AccessFlagBits::eColorAttachmentWrite : vk::AccessFlagBits::eTransferWrite;
+	to_present.srcAccessMask = renders_to_attachment ? vk::AccessFlagBits::eColorAttachmentWrite
+	                                                 : vk::AccessFlagBits::eTransferWrite;
 	to_present.dstAccessMask       = draw_attachment ? vk::AccessFlagBits::eColorAttachmentRead |
 	                                                       vk::AccessFlagBits::eColorAttachmentWrite
 	                                                 : vk::AccessFlagBits::eMemoryRead;

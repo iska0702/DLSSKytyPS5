@@ -225,12 +225,13 @@ public:
 
 	bool       dlss_enabled     = false;
 	DLSSMode   dlss_mode        = DLSSMode::Quality;
-	float      dlss_sharpness   = 0.0f;
+	float      dlss_sharpness   = 0.35f;
 	DLSSPreset dlss_preset      = DLSSPreset::Default;
 	bool       dlss_diagnostics = false;
 	bool       dlss_fg_enabled  = false;
 	DLSSGMode  dlss_fg_mode     = DLSSGMode::FG_2X;
 	ReflexMode reflex_mode      = ReflexMode::On;
+	bool       directstorage_enabled = false;
 
 	QString elf = QStringLiteral("eboot.bin");
 
@@ -272,6 +273,7 @@ public:
 		dlss_fg_enabled    = other.dlss_fg_enabled;
 		dlss_fg_mode       = other.dlss_fg_mode;
 		reflex_mode        = other.reflex_mode;
+		directstorage_enabled = other.directstorage_enabled;
 	}
 
 	void CopyGameInfoFrom(const Configuration& other) {
@@ -328,6 +330,7 @@ public:
 		KYTY_CFG_SET(dlss_fg_enabled);
 		KYTY_CFG_SET(dlss_fg_mode);
 		KYTY_CFG_SET(reflex_mode);
+		KYTY_CFG_SET(directstorage_enabled);
 		KYTY_CFG_SET(elf);
 	}
 
@@ -396,6 +399,7 @@ public:
 		if (EnumToText(reflex_mode).isEmpty()) {
 			reflex_mode = ReflexMode::On;
 		}
+		directstorage_enabled = s->value("directstorage_enabled", directstorage_enabled).toBool();
 		elf              = s->value("elf", elf).toString();
 	}
 };

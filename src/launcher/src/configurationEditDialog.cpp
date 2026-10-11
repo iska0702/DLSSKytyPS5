@@ -224,6 +224,13 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 		UpdateDLSSUI();
 	});
 
+#if defined(_WIN32)
+	m_directstorage_checkbox = new QCheckBox(tr("DirectStorage + Vulkan (Experimental)"), this);
+	m_directstorage_checkbox->setToolTip(
+	    tr("Enable Microsoft DirectStorage fast I/O and shared D3D12/Vulkan GPU streaming."));
+	m_ui->compatibilityLayout->addWidget(m_directstorage_checkbox);
+#endif
+
 	setSizeGripEnabled(true);
 
 	restoreGeometry(g_last_geometry);
@@ -374,6 +381,9 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 #endif
 #if defined(_WIN32)
 	m_ui->checkBox_red_zone_protection->setChecked(info.red_zone_protection_enabled);
+	if (m_directstorage_checkbox != nullptr) {
+		m_directstorage_checkbox->setChecked(info.directstorage_enabled);
+	}
 #else
 	m_ui->checkBox_red_zone_protection->setVisible(false);
 #endif
@@ -748,6 +758,11 @@ void ConfigurationEditDialog::save() {
 	}
 
 	UpdateInfo(m_info, *m_ui, m_global_settings);
+#if defined(_WIN32)
+	if (m_directstorage_checkbox != nullptr) {
+		m_info.directstorage_enabled = m_directstorage_checkbox->isChecked();
+	}
+#endif
 
 	emit accept();
 }

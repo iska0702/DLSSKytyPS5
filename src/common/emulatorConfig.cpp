@@ -215,6 +215,14 @@ uint32_t GetReflexMode() {
 	return g_config->reflex_mode;
 }
 
+bool DirectStorageEnabled() {
+	return g_config->directstorage_enabled;
+}
+
+void SetDirectStorageEnabled(bool enabled) {
+	g_config->directstorage_enabled = enabled;
+}
+
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 bool RedZoneProtectionEnabled() {
 	return g_config->red_zone_protection_enabled;

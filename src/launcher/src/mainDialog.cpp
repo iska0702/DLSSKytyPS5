@@ -348,6 +348,9 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	if (info.red_zone_protection_enabled) {
 		args << "--redzone";
 	}
+	if (info.directstorage_enabled) {
+		args << "--directstorage";
+	}
 #endif
 	for (const auto& binding: info.host_input_mapping) {
 		args << "--keymap" << binding;

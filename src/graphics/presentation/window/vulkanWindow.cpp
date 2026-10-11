@@ -28,6 +28,7 @@
 #include "graphics/presentation/window.h"
 #include "graphics/presentation/window/windowInternal.h"
 #include "graphics/presentation/dlss/dlssManager.h"
+#include "graphics/directstorage/directStorageManager.h"
 #include "graphics/shader/recompiler/CodegenOptions.h"
 #include "graphics/shader/recompiler/backend/spirv/SpirvEmitter.h"
 #include "kernel/memory.h"
@@ -652,6 +653,15 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 		supported_depth_clip.pNext = supported_features2.pNext;
 		supported_features2.pNext  = &supported_depth_clip;
 	}
+	const bool optical_flow_extension =
+	    HasExtension(device_extensions, VK_NV_OPTICAL_FLOW_EXTENSION_NAME);
+	VkPhysicalDeviceOpticalFlowFeaturesNV supported_optical_flow {
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPTICAL_FLOW_FEATURES_NV
+	};
+	if (optical_flow_extension) {
+		supported_optical_flow.pNext = supported_features2.pNext;
+		supported_features2.pNext    = &supported_optical_flow;
+	}
 	physical_device.getFeatures2(&supported_features2);
 	graphics.color_write_enable_enabled =
 	    color_write_extension && supported_color_write.colorWriteEnable == VK_TRUE;
@@ -1105,6 +1115,15 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 		image_atomic_int64.pNext = const_cast<void*>(create_info.pNext);
 		image_atomic_int64.sparseImageInt64Atomics = VK_FALSE;
 		create_info.pNext = &image_atomic_int64;
+	}
+	VkPhysicalDeviceOpticalFlowFeaturesNV optical_flow_features {
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPTICAL_FLOW_FEATURES_NV
+	};
+	if (optical_flow_extension && supported_optical_flow.opticalFlow == VK_TRUE) {
+		optical_flow_features.opticalFlow = VK_TRUE;
+		optical_flow_features.pNext       = const_cast<void*>(create_info.pNext);
+		create_info.pNext                 = &optical_flow_features;
+		LOGF("Vulkan opticalFlow feature enabled: true (required for DLSS-G Frame Generation)\n");
 	}
 	create_info.pQueueCreateInfos       = queue_create_infos.data();
 	create_info.queueCreateInfoCount    = queue_create_count;
@@ -1680,6 +1699,10 @@ void WindowContext::CreateVulkan() {
 		if (HasExtension(available_extensions, "VK_NVX_image_view_handle")) {
 			device_extensions.push_back("VK_NVX_image_view_handle");
 		}
+		// NVIDIA Optical Flow Accelerator (Required for DLSS Frame Generation / MFG in Vulkan)
+		if (HasExtension(available_extensions, VK_NV_OPTICAL_FLOW_EXTENSION_NAME)) {
+			device_extensions.push_back(VK_NV_OPTICAL_FLOW_EXTENSION_NAME);
+		}
 		// KYTY_GPU_TIMING (diagnostic) and KYTY_EOP_TIMESTAMPS=gpu only: maps GPU timestamps to the
 		// CPU clock and extends timestamp ordering guarantees across submissions. Not enabled for
 		// normal play.
@@ -1733,6 +1756,13 @@ void WindowContext::CreateVulkan() {
 	if (dlss_settings.enabled || dlss_settings.fg_enabled) {
 		if (!DLSSManager::Instance().Initialize(graphic_ctx, dlss_settings)) {
 			LOGF("[DLSS] Initialization did not succeed, fallback blitting will be used.\n");
+		}
+	}
+
+	// Initialize Microsoft DirectStorage + Vulkan interoperability if enabled
+	if (Config::DirectStorageEnabled()) {
+		if (!DirectStorageIntegration::DirectStorageManager::Instance().Initialize(&graphic_ctx)) {
+			LOGF("[DirectStorage] Initialization failed; fallback standard loading path will be used.\n");
 		}
 	}
 
@@ -1827,6 +1857,7 @@ WindowContext::~WindowContext() {
 		surface = nullptr;
 	}
 	DLSSManager::Instance().Shutdown(graphic_ctx);
+	DirectStorageIntegration::DirectStorageManager::Instance().Shutdown();
 	graphic_ctx.submission_queue.Shutdown();
 
 	if (graphic_ctx.device != nullptr) {

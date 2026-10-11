@@ -53,10 +53,14 @@ public:
 	[[nodiscard]] bool Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffer,
 	                            VulkanImage& source_image, vk::ImageView source_view,
 	                            vk::Extent2D source_extent, vk::Extent2D target_extent,
-	                            VulkanImage*& out_upscaled_image);
+	                            VulkanImage*& out_upscaled_image,
+	                            vk::Image backbuffer_image = nullptr,
+	                            vk::ImageView backbuffer_view = nullptr);
 
 	/// Frees GPU resources allocated by DLSS.
 	void ReleaseResources(GraphicContext& graphics);
+
+	[[nodiscard]] vk::ImageView GetOutputView() const noexcept { return m_output_view; }
 
 	/// Returns real-time status string for window title bar or OSD overlay.
 	[[nodiscard]] std::string GetOverlayInfo() const;
@@ -155,6 +159,7 @@ private:
 	uint32_t                m_max_fg_frames         = 0;
 	bool                    m_dynamic_mfg_supported = false;
 	bool                    m_reflex_supported      = false;
+	bool                    m_nis_supported         = false;
 	uint32_t                m_presented_multiplier  = 1;
 	vk::Format              m_swapchain_format      = vk::Format::eUndefined;
 	void*                   m_last_frame_token      = nullptr;
