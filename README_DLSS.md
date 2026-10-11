@@ -1,54 +1,67 @@
 # KytyPS5 — DLSS & Frame Generation (Experimental Fork)
 
-Экспериментальная сборка эмулятора **KytyPS5** с нативной поддержкой технологий **NVIDIA DLSS Super Resolution**, **DLSS 3 Frame Generation** и **NVIDIA Reflex**.
+An experimental fork of the **KytyPS5** PlayStation 5 emulator featuring native integration of **NVIDIA DLSS Super Resolution (DLSS 3.7+)**, **DLSS 3 Frame Generation**, and **NVIDIA Reflex Low Latency** via the NVIDIA Streamline SDK.
 
 ---
 
-### Основные возможности
+## Key Features
 
 1. **NVIDIA DLSS Super Resolution (DLSS 3.7+)**:
-   - Апскейлинг внутреннего рендера игры до выбранного целевого разрешения монитора (1080p, 1440p / 2K, 4K).
-   - Интеллектуальная динамическая интерполяция и реконструкция деталей через тензорные ядра NVIDIA.
-   - Управление резкостью (**DLSS Sharpness**) прямо из настроек конфигурации.
+   - High-fidelity AI upscaling from lower internal render resolutions up to target display resolutions (1080p, 1440p / 2K, 4K).
+   - Dynamic resolution reconstruction accelerated by NVIDIA Tensor Cores.
+   - Built-in sharpness slider (**DLSS Sharpness**) configurable directly from the launcher GUI.
 
-2. **NVIDIA DLSS 3 Frame Generation (Экспериментально)**:
-   - Генерация промежуточных кадров на базе оптического потока (поддерживается на видеокартах **RTX 40-й серии**).
-   - В интерфейсе оставлено простое включение стандартного DLSS 3 FG (2x).
-   - *Продвинутый Multi-Frame Generation (MFG)* доступен только через CLI-параметр `--dlss-mfg <2x|3x|4x|dynamic>` для энтузиастов.
+2. **NVIDIA DLSS 3 Frame Generation (Experimental)**:
+   - AI-powered intermediate frame generation leveraging Optical Flow Accelerators on **GeForce RTX 40-series GPUs**.
+   - Accessible via the **"Enable Frame Generation (DLSS 3)"** toggle in the launcher settings (standard 2x FG).
+   - *Advanced Multi-Frame Generation (MFG)* is preserved for power users via the CLI flag: `--dlss-mfg <2x|3x|4x|dynamic>`.
 
 3. **NVIDIA Reflex Low Latency**:
-   - Минимизация задержки ввода (режимы: *Off*, *On*, *On + Boost*).
+   - Reduces system and presentation latency (Modes: *Off*, *On*, *On + Boost*).
 
-4. **Патчи разрешения (Game Patches)**:
-   - В папке `_Patches/PPSA01325.json` подготовлены готовые пресеты рендера для популярных разрешений:
-     - **HD (720p)**: Ultra Perf (428x240), Perf (640x360), Balanced (744x432), Quality (854x480)
-     - **FHD (1080p)**: Ultra Perf (640x360), Perf (960x540), Balanced (1114x648), Quality (1280x720)
-     - **QHD / 2K (1440p)**: Ultra Perf (854x480), Perf (1280x720), Balanced (1486x840), Quality (1708x960)
-     - **4K (2160p)**: Ultra Perf (1280x720), Perf (1920x1080), Balanced (2228x1252), Quality (2560x1440)
-   - Все размеры кратны 2, что полностью исключает ошибку NGX `0xbad00005` (`InvalidParameter`).
-
----
-
-### Как включить и проверить DLSS
-
-1. В **Launcher**:
-   - Зайдите в **Settings** -> **Configuration**.
-   - Во вкладке **Graphics** установите целевое разрешение экрана (например, `2560x1440`).
-   - В блоке **NVIDIA DLSS & Streamline (Experimental)** поставьте галочку `Enable DLSS Super Resolution`.
-   - При наличии видеокарты серии RTX 40 включите `Enable Frame Generation (DLSS 3)`.
-2. В патчах игры:
-   - Откройте **Manage Patches** и выберите желаемый пресет внутреннего рендера (например, *QHD - DLSS Performance (1280x720)* или *DLSS Quality (1708x960)*).
-   - Игра будет рендериться в этом разрешении, а DLSS восстановит четкое изображение до 2K/4K.
-3. Проверка работы DLSS (Экранный оверлей NVIDIA):
-   - Запустите файл `Enable_NVIDIA_DLSS_Indicator.reg`.
-   - При запуске эмулятора в левом нижнем углу появится водяной знак NVIDIA DLSS с версией dll, исходным разрешением и режимом апскейла.
-   - Для отключения запустите `Disable_NVIDIA_DLSS_Indicator.reg`.
+4. **Engineered Resolution Patches (Game Patches)**:
+   - Pre-configured render resolution tiers in `_Patches/PPSA01325.json`:
+     - **HD (720p Output)**: Ultra Perf (`428x240`), Perf (`640x360`), Balanced (`744x432`), Quality (`854x480`)
+     - **FHD (1080p Output)**: Ultra Perf (`640x360`), Perf (`960x540`), Balanced (`1114x648`), Quality (`1280x720`)
+     - **QHD / 2K (1440p Output)**: Ultra Perf (`854x480`), Perf (`1280x720`), Balanced (`1486x840`), Quality (`1708x960`)
+     - **4K (2160p Output)**: Ultra Perf (`1280x720`), Perf (`1920x1080`), Balanced (`2228x1252`), Quality (`2560x1440`)
+   - All render dimensions are strictly aligned to even integers (multiples of 2/4), completely preventing the NVIDIA NGX `0xbad00005` (`NVSDK_NGX_Result_FAIL_InvalidParameter`) error.
 
 ---
 
-### Требования к системе
-- Windows 10/11 x64
-- Видеокарта:
-  - **NVIDIA GeForce RTX 20/30/40** (для DLSS Super Resolution и Reflex)
-  - **NVIDIA GeForce RTX 40** (для DLSS Frame Generation)
-- Актуальные драйверы NVIDIA Game Ready.
+## Quick Start & Verification
+
+### 1. Configure Launcher
+1. Open **Launcher** -> **Settings** -> **Configuration**.
+2. Under the **Graphics** tab:
+   - Set **Screen Resolution** to your target display resolution (e.g., `2560x1440` or `3840x2160`).
+   - Under **NVIDIA DLSS & Streamline (Experimental)**:
+     - Check **Enable DLSS Super Resolution**.
+     - (Optional, RTX 40-series): Check **Enable Frame Generation (DLSS 3)**.
+     - Adjust **Sharpness** to preference (default: 0.15).
+     - Select **NVIDIA Reflex Mode** (*On* or *Boost*).
+
+### 2. Select Internal Render Resolution in Game Patches
+1. Right-click the game (e.g., *Bloodborne / Demon's Souls*) -> **Manage Patches**.
+2. Select your desired internal resolution preset matching your target scale (e.g., *QHD - DLSS Performance (1280x720)* or *QHD - DLSS Quality (1708x960)*).
+3. The game will render at this lower base resolution, and DLSS will upscale it to crisp 1440p/4K with Tensor Core anti-aliasing.
+
+### 3. Verify DLSS with the NVIDIA On-Screen Indicator
+To visually verify that DLSS and Streamline are actively processing frames:
+- Double-click `Enable_NVIDIA_DLSS_Indicator.reg` to activate NVIDIA's official DLSS overlay.
+- When launching the emulator, a watermark will appear in the lower-left corner displaying:
+  - DLSS DLL version (e.g., `3.7.x`)
+  - Real-time input render resolution vs. output display resolution
+  - Active DLSS scaling preset
+- To disable the overlay later, double-click `Disable_NVIDIA_DLSS_Indicator.reg`.
+
+---
+
+## System Requirements
+
+- **OS**: Windows 10/11 x64 (Build 19041+)
+- **GPU**:
+  - **NVIDIA GeForce RTX 20 / 30 / 40 Series** (Required for DLSS Super Resolution & Reflex)
+  - **NVIDIA GeForce RTX 40 Series** (Required for DLSS Frame Generation)
+- **Driver**: Latest NVIDIA Game Ready / Studio Drivers.
+- **Dependencies**: Included in release (`sl.*.dll`, `nvngx_*.dll`, `Qt6` runtime).

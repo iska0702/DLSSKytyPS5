@@ -1,10 +1,16 @@
-# KytyPS5 experimental
+# KytyPS5 (NVIDIA DLSS & Frame Generation Experimental Fork)
+
+> [!TIP]
+> **NVIDIA DLSS & Frame Generation Integration**: This fork includes native support for **NVIDIA DLSS Super Resolution (3.7+)**, **DLSS 3 Frame Generation**, and **Reflex Low Latency** via NVIDIA Streamline SDK.
+> Detailed documentation and setup guide: **[README_DLSS.md](README_DLSS.md)**.
+> Pre-built packaged binaries are available under **[Releases](https://github.com/iska0702/DLSSKytyPS5/releases)**.
 
 The main branch contains the U59 renderer, the validated Demon's Souls shader and
 compatibility changes, and the U59 integration work: command-processor and VRAM
 improvements, profile-guided optimization, and upstream's newer changes. No 60 FPS
 result is claimed.
 
+- [NVIDIA DLSS & Frame Generation Guide](README_DLSS.md)
 - [U59 feature changes and performance evidence](docs/CHANGES-U59.md)
 - [Fork commit and file catalog through U59](docs/CHANGE-CATALOG.md)
 - [Current release: what is new, launch and build guide](docs/EXPERIMENTAL.md)
