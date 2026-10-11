@@ -127,8 +127,8 @@ struct CodegenOptions {
 	// once before the dispatch, so such a slot always fails to evaluate and the whole dispatch is
 	// dropped. An S_BUFFER_LOAD through a V# read that way then reads through BDA, and a program with
 	// another such descriptor (no BDA path) is dropped, as before. Reads whose address can be
-	// evaluated before the dispatch keep their flat slots.
-	bool srt_variant_reads = false;
+	// evaluated before the dispatch keep their flat slots. Default true (required for Astro RT lighting).
+	bool srt_variant_reads = true;
 	// KYTY_NATIVE_INDIRECT_MESH=1|on|verify|exit: mesh draw dword 3 equal to
 	// IR::PushData::MeshIndirectSentinel makes mesh shaders read their six draw dwords from the
 	// parameter block at the device address in dwords 0-1 (a GPU-converted indirect mesh draw,
