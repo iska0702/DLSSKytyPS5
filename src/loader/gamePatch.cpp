@@ -100,67 +100,29 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 		const auto target_w  = Config::GetScreenWidth();
 		const auto target_h  = Config::GetScreenHeight();
 
-		std::string target_res;
-		if (target_w <= 1920 && target_h <= 1080) {
-			// 1080p (FHD) display target
-			switch (dlss_mode) {
-				case Libs::Graphics::DLSSMode::UltraPerformance:
-					target_res = "640x360";
-					break;
-				case Libs::Graphics::DLSSMode::Performance:
-					target_res = "960x540";
-					break;
-				case Libs::Graphics::DLSSMode::Balanced:
-				case Libs::Graphics::DLSSMode::Quality:
-					target_res = "1280x720";
-					break;
-				case Libs::Graphics::DLSSMode::DLAA:
-					target_res = "1920x1080";
-					break;
-				default:
-					break;
-			}
-		} else if (target_w <= 2560 && target_h <= 1440) {
-			// 1440p (QHD / 2K) display target
-			switch (dlss_mode) {
-				case Libs::Graphics::DLSSMode::UltraPerformance:
-					target_res = "640x360";
-					break;
-				case Libs::Graphics::DLSSMode::Performance:
-					target_res = "960x540";
-					break;
-				case Libs::Graphics::DLSSMode::Balanced:
-					target_res = "1280x720";
-					break;
-				case Libs::Graphics::DLSSMode::Quality:
-					target_res = "1920x1080";
-					break;
-				case Libs::Graphics::DLSSMode::DLAA:
-					target_res = "2432x1368";
-					break;
-				default:
-					break;
-			}
-		} else {
-			// 4K (UHD) display target
-			switch (dlss_mode) {
-				case Libs::Graphics::DLSSMode::UltraPerformance:
-					target_res = "1280x720";
-					break;
-				case Libs::Graphics::DLSSMode::Performance:
-					target_res = "1920x1080";
-					break;
-				case Libs::Graphics::DLSSMode::Balanced:
-				case Libs::Graphics::DLSSMode::Quality:
-					target_res = "2432x1368";
-					break;
-				case Libs::Graphics::DLSSMode::DLAA:
-					target_res = "3840x2160";
-					break;
-				default:
-					break;
-			}
+		float scale = 1.0f;
+		switch (dlss_mode) {
+			case Libs::Graphics::DLSSMode::DLAA:
+				scale = 1.0f;
+				break;
+			case Libs::Graphics::DLSSMode::Quality:
+				scale = 0.666667f; // ~66.7% (1.5x upscaling)
+				break;
+			case Libs::Graphics::DLSSMode::Balanced:
+				scale = 0.58f;     // ~58% (1.72x upscaling)
+				break;
+			case Libs::Graphics::DLSSMode::Performance:
+				scale = 0.50f;     // 50% (2.0x upscaling)
+				break;
+			case Libs::Graphics::DLSSMode::UltraPerformance:
+				scale = 0.333333f; // ~33.3% (3.0x upscaling)
+				break;
+			default:
+				break;
 		}
+
+		const uint32_t ideal_w = static_cast<uint32_t>(std::round(target_w * scale));
+		const uint32_t ideal_h = static_cast<uint32_t>(std::round(target_h * scale));
 
 		bool user_has_enabled_resolution_mod = false;
 		std::string user_enabled_mod_name;
@@ -180,26 +142,56 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 			Log::WriteToConsoleAndLog(fmt::format(
 			    "Game patch: [DLSS] Keeping user-configured mod \"{}\" (DLSS will upscale from it)\n",
 			    user_enabled_mod_name));
-		} else if (!target_res.empty()) {
-			bool found_match = false;
-			for (const auto& entry: entries) {
-				if (entry.name.find("render resolution") != std::string::npos &&
-				    entry.name.find(target_res) != std::string::npos) {
-					found_match = true;
-					break;
+		} else {
+			// Find available resolution mods and select the one closest to the ideal DLSS percentage
+			int best_index = -1;
+			int64_t best_diff = -1;
+
+			for (size_t i = 0; i < entries.size(); i++) {
+				const auto& entry = entries[i];
+				if (entry.name.find("render resolution") == std::string::npos) {
+					continue;
+				}
+				// Parse WxH from mod name
+				uint32_t mod_w = 0, mod_h = 0;
+				const auto x_pos = entry.name.find('x');
+				if (x_pos != std::string::npos && x_pos > 0 && x_pos + 1 < entry.name.size()) {
+					size_t start_w = x_pos;
+					while (start_w > 0 && std::isdigit(static_cast<unsigned char>(entry.name[start_w - 1]))) {
+						start_w--;
+					}
+					size_t end_h = x_pos + 1;
+					while (end_h < entry.name.size() && std::isdigit(static_cast<unsigned char>(entry.name[end_h]))) {
+						end_h++;
+					}
+					if (start_w < x_pos && end_h > x_pos + 1) {
+						mod_w = static_cast<uint32_t>(std::stoul(entry.name.substr(start_w, x_pos - start_w)));
+						mod_h = static_cast<uint32_t>(std::stoul(entry.name.substr(x_pos + 1, end_h - (x_pos + 1))));
+					}
+				}
+
+				if (mod_w > 0 && mod_h > 0) {
+					// Compare difference in height (primary) and width to ideal DLSS render resolution
+					const int64_t diff = std::abs(static_cast<int64_t>(mod_h) - static_cast<int64_t>(ideal_h)) * 1000 +
+					                     std::abs(static_cast<int64_t>(mod_w) - static_cast<int64_t>(ideal_w));
+					if (best_diff < 0 || diff < best_diff) {
+						best_diff = diff;
+						best_index = static_cast<int>(i);
+					}
 				}
 			}
 
-			if (found_match) {
-				for (auto& entry: entries) {
-					if (entry.name.find("render resolution") != std::string::npos) {
-						if (entry.name.find(target_res) != std::string::npos) {
-							entry.enabled = true;
+			if (best_index >= 0) {
+				for (size_t i = 0; i < entries.size(); i++) {
+					if (entries[i].name.find("render resolution") != std::string::npos) {
+						if (static_cast<int>(i) == best_index) {
+							entries[i].enabled = true;
 							Log::WriteToConsoleAndLog(fmt::format(
-							    "Game patch: [DLSS] Auto-activated resolution mod \"{}\" for {}\n",
-							    entry.name, Libs::Graphics::DLSSModeToString(dlss_mode)));
+							    "Game patch: [DLSS] Auto-activated resolution mod \"{}\" for {} ({:.0f}% of {}x{} -> ideal: {}x{})\n",
+							    entries[i].name, Libs::Graphics::DLSSModeToString(dlss_mode),
+							    scale * 100.0f, target_w, target_h, ideal_w, ideal_h));
 						} else {
-							entry.enabled = false;
+							entries[i].enabled = false;
 						}
 					}
 				}

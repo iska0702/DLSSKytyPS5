@@ -655,6 +655,178 @@
                 }
             ],
             "name": "Fixed render resolution 640x360"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbc0030000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bcac060000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbc0030000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bcac060000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bcc0030000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41beac060000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bcc0030000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41beac060000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "baac060000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9c0030000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "baac060000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9c0030000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bec0030000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bbac060000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bec0030000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bbac060000"
+                }
+            ],
+            "name": "Fixed render resolution 1708x960"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbe0010000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc56030000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbe0010000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc56030000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bce0010000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be56030000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bce0010000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be56030000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba56030000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9e0010000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba56030000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9e0010000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bee0010000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb56030000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bee0010000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb56030000"
+                }
+            ],
+            "name": "Fixed render resolution 854x480"
         }
     ],
     "name": "ASTRO's PLAYROOM: elapsed-time FPS unlock + NO ray-traced GI + fixed render resolution (experimental / sin probar)",
