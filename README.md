@@ -5,7 +5,7 @@
 >
 > **Documentation and Setup:** [README_DLSS.md](README_DLSS.md)
 >
-> **Pre-built Windows Releases:** [Download from GitHub Releases](https://github.com/iska0702/DLSSKytyPS5/releases)
+> **Windows Releases:** [Download from GitHub Releases](https://github.com/iska0702/DLSSKytyPS5/releases)
 
 This project is a fork of [Jetsku/KytyPS5](https://github.com/Jetsku/KytyPS5), with experimental graphics enhancements and additional launcher configuration options.
 
