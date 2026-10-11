@@ -196,7 +196,10 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 		        auto log = TextToEnum<Configuration::LogDirection>(text);
 		        m_ui->lineEdit_printf_file->setEnabled(log == Configuration::LogDirection::File);
 	        });
-	connect(m_ui->checkBox_dlss_enable, &QCheckBox::toggled, this, [this](bool) {
+	connect(m_ui->checkBox_dlss_enable, &QCheckBox::toggled, this, [this](bool checked) {
+		if (!checked) {
+			m_ui->checkBox_dlss_fg_enable->setChecked(false);
+		}
 		UpdateDLSSUI();
 	});
 	connect(m_ui->checkBox_dlss_fg_enable, &QCheckBox::toggled, this, [this](bool checked) {
@@ -814,7 +817,7 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui, boo
 	                          ? static_cast<Configuration::DLSSPreset>(preset_idx)
 	                          : Configuration::DLSSPreset::Default;
 	info.dlss_diagnostics = ui.checkBox_dlss_diagnostics->isChecked();
-	info.dlss_fg_enabled  = ui.checkBox_dlss_fg_enable->isChecked();
+	info.dlss_fg_enabled  = info.dlss_enabled && ui.checkBox_dlss_fg_enable->isChecked();
 	switch (ui.comboBox_dlss_fg_mode->currentIndex()) {
 	case 0:  info.dlss_fg_mode = Configuration::DLSSGMode::FG_2X; break;
 	case 1:  info.dlss_fg_mode = Configuration::DLSSGMode::MFG_3X; break;

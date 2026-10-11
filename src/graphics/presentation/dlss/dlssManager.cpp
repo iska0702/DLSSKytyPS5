@@ -319,12 +319,12 @@ bool DLSSManager::Initialize(GraphicContext& graphics, const DLSSSettings& setti
 	}
 
 	m_initialized = true;
-	if (m_settings.enabled) {
+	if (m_settings.enabled && m_settings.mode != DLSSMode::Off) {
 		m_status = DLSSStatus::Available;
 		m_status_message = "DLSS Enabled & Available";
 	} else {
 		m_status = DLSSStatus::Disabled;
-		m_status_message = "DLSS Disabled in configuration";
+		m_status_message = "DLSS Disabled";
 	}
 
 	return true;
@@ -939,7 +939,11 @@ uint32_t DLSSManager::GetEffectiveMultiplier() const noexcept {
 }
 
 std::string DLSSManager::GetOverlayInfo() const {
-	if (!m_settings.enabled && !m_settings.fg_enabled) {
+	if (!m_settings.enabled || m_settings.mode == DLSSMode::Off) {
+		if (m_settings.fg_enabled && m_fg_active) {
+			const uint32_t mult = GetEffectiveMultiplier();
+			return fmt::format("DLSS: Off (FG {}x)", mult);
+		}
 		return "DLSS: Off";
 	}
 	const auto st = m_status.load();
@@ -953,15 +957,11 @@ std::string DLSSManager::GetOverlayInfo() const {
 		if (m_settings.fg_enabled || m_settings.reflex_mode != ReflexMode::Off) {
 			reflex_str = fmt::format(" | {}", ReflexModeToString(m_settings.reflex_mode));
 		}
-		if (m_settings.enabled && m_settings.mode != DLSSMode::Off) {
-			return fmt::format("DLSS: Active ({} {}x{}->{}x{}){}{}",
-			                   DLSSModeToString(m_settings.mode),
-			                   m_prev_input_extent.width, m_prev_input_extent.height,
-			                   m_prev_target_extent.width, m_prev_target_extent.height,
-			                   fg_str, reflex_str);
-		} else {
-			return fmt::format("DLSS: Native{}{}", fg_str, reflex_str);
-		}
+		return fmt::format("DLSS: Active ({} {}x{}->{}x{}){}{}",
+		                   DLSSModeToString(m_settings.mode),
+		                   m_prev_input_extent.width, m_prev_input_extent.height,
+		                   m_prev_target_extent.width, m_prev_target_extent.height,
+		                   fg_str, reflex_str);
 	}
 	if (st == DLSSStatus::Available) {
 		return fmt::format("DLSS: Ready ({})", DLSSModeToString(m_settings.mode));

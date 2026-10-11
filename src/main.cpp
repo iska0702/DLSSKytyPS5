@@ -305,6 +305,12 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 			continue;
 		}
 
+		if (arg == "--no-dlss" || arg == "--dlss=off" || arg == "--dlss=false") {
+			options.config.dlss_enabled = false;
+			options.config.dlss_mode = 0;
+			continue;
+		}
+
 		if (arg == "--dlss") {
 			options.config.dlss_enabled = true;
 			if (i + 1 < argc) {
@@ -326,7 +332,8 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 				} else if (lower_val == "dlaa") {
 					options.config.dlss_mode = 5;
 					i++;
-				} else if (lower_val == "off") {
+				} else if (lower_val == "off" || lower_val == "disabled" || lower_val == "false" || lower_val == "0") {
+					options.config.dlss_enabled = false;
 					options.config.dlss_mode = 0;
 					i++;
 				}
@@ -340,7 +347,6 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		}
 
 		if (arg == "--dlss-fg") {
-			options.config.dlss_enabled = true;
 			options.config.dlss_fg_enabled = true;
 			if (i + 1 < argc) {
 				std::string next_val = argv[i + 1];
@@ -596,8 +602,9 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 				options.config.dlss_mode = 4;
 			} else if (lower_val == "dlaa") {
 				options.config.dlss_mode = 5;
-			} else if (lower_val == "off") {
+			} else if (lower_val == "off" || lower_val == "disabled" || lower_val == "false" || lower_val == "0") {
 				options.config.dlss_mode = 0;
+				options.config.dlss_enabled = false;
 			} else {
 				uint32_t mode_val = 0;
 				if (ParseUint32(value, mode_val) && mode_val <= 5) {
