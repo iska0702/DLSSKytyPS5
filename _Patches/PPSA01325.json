@@ -55,7 +55,7 @@
             "name": "Decouple gameplay timers from render FPS"
         },
         {
-            "enabled": true,
+            "enabled": false,
             "memory": [
                 {
                     "off": "bb70080000",

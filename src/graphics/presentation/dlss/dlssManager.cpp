@@ -583,11 +583,18 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
                            VulkanImage*& out_upscaled_image) {
 	out_upscaled_image = nullptr;
 
-	if (!m_settings.enabled || m_settings.mode == DLSSMode::Off || !m_available || !m_streamline_loaded) {
+	if (!m_settings.enabled || !m_available || !m_streamline_loaded) {
 		return false;
 	}
 
-	if (source_extent.width > target_extent.width || source_extent.height > target_extent.height) {
+	const bool sr_requested = (m_settings.mode != DLSSMode::Off);
+	const bool fg_active_requested = (m_fg_supported && m_settings.fg_enabled && m_settings.fg_mode != DLSSGMode::Off);
+
+	if (!sr_requested && !fg_active_requested) {
+		return false;
+	}
+
+	if (sr_requested && (source_extent.width > target_extent.width || source_extent.height > target_extent.height)) {
 		// DLSS Super Resolution is an upscaler; it cannot downscale.
 		// When the game renders at higher resolution than the output window (e.g. 4K frame to 720p window),
 		// fall back smoothly to the standard presentation blit/downscale.
@@ -595,7 +602,9 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		m_status_message = fmt::format("Input ({}x{}) > Target ({}x{})",
 		                               source_extent.width, source_extent.height,
 		                               target_extent.width, target_extent.height);
-		return false;
+		if (!fg_active_requested) {
+			return false;
+		}
 	}
 
 	if (!PrepareResources(graphics, source_extent, target_extent)) {
@@ -828,44 +837,55 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		return false;
 	}
 
-	// Evaluate Feature
-	const sl::BaseStructure* inputs[] = { &viewport };
-	res = slEvaluateFeature(sl::kFeatureDLSS, *frame_token, inputs, 1, static_cast<sl::CommandBuffer*>(cmd_buffer));
-	if (res != sl::Result::eOk) {
-		m_status = DLSSStatus::Error;
-		m_status_message = fmt::format("slEvaluateFeature failed: {}", static_cast<int>(res));
-		LOGF("[DLSS] %s\n", m_status_message.c_str());
-		return false;
+	if (sr_requested && source_extent.width <= target_extent.width && source_extent.height <= target_extent.height) {
+		// Evaluate Super Resolution Feature
+		const sl::BaseStructure* inputs[] = { &viewport };
+		res = slEvaluateFeature(sl::kFeatureDLSS, *frame_token, inputs, 1, static_cast<sl::CommandBuffer*>(cmd_buffer));
+		if (res != sl::Result::eOk) {
+			m_status = DLSSStatus::Error;
+			m_status_message = fmt::format("slEvaluateFeature failed: {}", static_cast<int>(res));
+			LOGF("[DLSS] %s\n", m_status_message.c_str());
+			return false;
+		}
+
+		if (m_reflex_supported) {
+			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
+		}
+
+		m_last_frame_token = frame_token;
+
+		// Transition output image to eTransferSrcOptimal so swapchain blit/copy can read it
+		{
+			vk::ImageMemoryBarrier to_src {};
+			to_src.sType               = vk::StructureType::eImageMemoryBarrier;
+			to_src.oldLayout           = vk::ImageLayout::eGeneral;
+			to_src.newLayout           = vk::ImageLayout::eTransferSrcOptimal;
+			to_src.srcAccessMask       = vk::AccessFlagBits::eShaderWrite;
+			to_src.dstAccessMask       = vk::AccessFlagBits::eTransferRead;
+			to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_src.image               = m_output_image.image;
+			to_src.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+			cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+			                           vk::PipelineStageFlagBits::eTransfer,
+			                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_src);
+		}
+
+		m_status = DLSSStatus::Active;
+		m_status_message = fmt::format("DLSS Active: {} -> {}",
+		                               DLSSModeToString(m_settings.mode),
+		                               fmt::format("{}x{}", target_extent.width, target_extent.height));
+		out_upscaled_image = &m_output_image;
+	} else {
+		// Super Resolution is off or downscaling; only Frame Generation / Reflex is active
+		if (m_reflex_supported) {
+			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
+		}
+		m_last_frame_token = frame_token;
+		m_status = DLSSStatus::Active;
+		m_status_message = "DLSS-G Active (Native)";
+		out_upscaled_image = nullptr;
 	}
-
-	if (m_reflex_supported) {
-		slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
-	}
-
-	m_last_frame_token = frame_token;
-
-	// Transition output image to eTransferSrcOptimal so swapchain blit/copy can read it
-	{
-		vk::ImageMemoryBarrier to_src {};
-		to_src.sType               = vk::StructureType::eImageMemoryBarrier;
-		to_src.oldLayout           = vk::ImageLayout::eGeneral;
-		to_src.newLayout           = vk::ImageLayout::eTransferSrcOptimal;
-		to_src.srcAccessMask       = vk::AccessFlagBits::eShaderWrite;
-		to_src.dstAccessMask       = vk::AccessFlagBits::eTransferRead;
-		to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_src.image               = m_output_image.image;
-		to_src.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
-		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
-		                           vk::PipelineStageFlagBits::eTransfer,
-		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_src);
-	}
-
-	m_status = DLSSStatus::Active;
-	m_status_message = fmt::format("DLSS Active: {} -> {}",
-	                               DLSSModeToString(m_settings.mode),
-	                               fmt::format("{}x{}", target_extent.width, target_extent.height));
-	out_upscaled_image = &m_output_image;
 	return true;
 }
 
@@ -979,20 +999,22 @@ VkResult DLSSManager::QueuePresent(VkQueue queue, const VkPresentInfoKHR* presen
 				if (fg_state.numFramesActuallyPresented > 0) {
 					m_presented_multiplier = fg_state.numFramesActuallyPresented;
 				}
-				if (fg_state.status != sl::DLSSGStatus::eOk) {
-					static uint32_t s_last_status = 0;
-					const uint32_t cur_status = static_cast<uint32_t>(fg_state.status);
-					if (cur_status != s_last_status) {
-						s_last_status = cur_status;
-						std::printf("[DLSS][Warn] DLSS-G Runtime Status: 0x%X (", cur_status);
-						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailResolutionTooLow)) std::printf("ResolutionTooLow ");
-						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailReflexNotDetectedAtRuntime)) std::printf("ReflexNotDetected ");
-						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailHDRFormatNotSupported)) std::printf("HDRNotSupported ");
-						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailCommonConstantsInvalid)) std::printf("CommonConstantsInvalid ");
-						if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailGetCurrentBackBufferIndexNotCalled)) std::printf("GetBackBufferNotCalled ");
-						std::printf(")\n");
-						std::fflush(stdout);
-					}
+				static uint32_t s_last_status = 0;
+				static uint32_t s_last_presented = 0;
+				const uint32_t cur_status = static_cast<uint32_t>(fg_state.status);
+				if (cur_status != s_last_status || fg_state.numFramesActuallyPresented != s_last_presented) {
+					s_last_status = cur_status;
+					s_last_presented = fg_state.numFramesActuallyPresented;
+					std::string issues;
+					if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailResolutionTooLow)) issues += "ResolutionTooLow ";
+					if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailReflexNotDetectedAtRuntime)) issues += "ReflexNotDetected ";
+					if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailHDRFormatNotSupported)) issues += "HDRNotSupported ";
+					if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailCommonConstantsInvalid)) issues += "CommonConstantsInvalid ";
+					if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailGetCurrentBackBufferIndexNotCalled)) issues += "GetBackBufferNotCalled ";
+					if (issues.empty()) issues = "OK";
+					Log::WriteToConsoleAndLog(fmt::format(
+					    "[DLSS] DLSS-G Runtime Status: 0x{:X} ({}), presented multiplier: {}x\n",
+					    cur_status, issues, fg_state.numFramesActuallyPresented));
 				}
 			}
 		}
