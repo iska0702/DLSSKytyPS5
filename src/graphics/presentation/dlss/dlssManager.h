@@ -63,6 +63,22 @@ public:
 	/// Notifies Reflex / PCL markers around presentation
 	void SetPresentMarker(bool start);
 
+	/// Streamline interposer Vulkan hook proxies
+	VkResult QueuePresent(VkQueue queue, const VkPresentInfoKHR* presentInfo);
+	[[nodiscard]] bool HasQueuePresentProxy() const noexcept;
+
+	VkResult AcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
+	                          VkSemaphore semaphore, VkFence fence, uint32_t* imageIndex);
+	[[nodiscard]] bool HasAcquireNextImageProxy() const noexcept;
+
+	VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* createInfo,
+	                         const VkAllocationCallbacks* allocator, VkSwapchainKHR* swapchain);
+	[[nodiscard]] bool HasCreateSwapchainProxy() const noexcept;
+
+	void DestroySwapchain(VkDevice device, VkSwapchainKHR swapchain,
+	                      const VkAllocationCallbacks* allocator);
+	[[nodiscard]] bool HasDestroySwapchainProxy() const noexcept;
+
 private:
 	bool SetupStreamline(GraphicContext& graphics);
 	void CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D extent);
@@ -77,6 +93,12 @@ private:
 
 	uint32_t                m_frame_counter = 0;
 	uint32_t                m_viewport_id   = 0;
+
+	// Interposer Vulkan function pointers
+	PFN_vkQueuePresentKHR     m_pfn_vkQueuePresentKHR     = nullptr;
+	PFN_vkAcquireNextImageKHR m_pfn_vkAcquireNextImageKHR = nullptr;
+	PFN_vkCreateSwapchainKHR  m_pfn_vkCreateSwapchainKHR  = nullptr;
+	PFN_vkDestroySwapchainKHR m_pfn_vkDestroySwapchainKHR = nullptr;
 
 	// DLSS Intermediate Output Image (RGBA8 UNORM or format matching swapchain)
 	VulkanImage             m_output_image;

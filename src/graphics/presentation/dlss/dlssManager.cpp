@@ -119,7 +119,8 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	pref.numPathsToPlugins = 1;
 
 	pref.flags = sl::PreferenceFlags::eDisableCLStateTracking |
-	             sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+	             sl::PreferenceFlags::eUseFrameBasedResourceTagging |
+	             sl::PreferenceFlags::eUseManualHooking;
 	sl::Feature features[] = {
 		sl::kFeatureDLSS,
 		sl::kFeatureDLSS_G,
@@ -139,6 +140,25 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 		m_status_message = fmt::format("Streamline slInit failed: code {}", static_cast<int>(res));
 		LOGF("[DLSS] %s\n", m_status_message.c_str());
 		return false;
+	}
+
+	HMODULE hInterposer = GetModuleHandleA("sl.interposer.dll");
+	if (!hInterposer) {
+		hInterposer = LoadLibraryA("sl.interposer.dll");
+	}
+	if (hInterposer) {
+		m_pfn_vkQueuePresentKHR = reinterpret_cast<PFN_vkQueuePresentKHR>(
+			GetProcAddress(hInterposer, "vkQueuePresentKHR"));
+		m_pfn_vkAcquireNextImageKHR = reinterpret_cast<PFN_vkAcquireNextImageKHR>(
+			GetProcAddress(hInterposer, "vkAcquireNextImageKHR"));
+		m_pfn_vkCreateSwapchainKHR = reinterpret_cast<PFN_vkCreateSwapchainKHR>(
+			GetProcAddress(hInterposer, "vkCreateSwapchainKHR"));
+		m_pfn_vkDestroySwapchainKHR = reinterpret_cast<PFN_vkDestroySwapchainKHR>(
+			GetProcAddress(hInterposer, "vkDestroySwapchainKHR"));
+		std::printf("[DLSS] Interposer Vulkan hooks resolved: QueuePresent=%p, AcquireNextImage=%p, CreateSwapchain=%p, DestroySwapchain=%p\n",
+		            (void*)m_pfn_vkQueuePresentKHR, (void*)m_pfn_vkAcquireNextImageKHR,
+		            (void*)m_pfn_vkCreateSwapchainKHR, (void*)m_pfn_vkDestroySwapchainKHR);
+		std::fflush(stdout);
 	}
 
 	sl::VulkanInfo vk_info {};
@@ -678,12 +698,17 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	mvec_res.arrayLayers = 1;
 	mvec_res.usage = static_cast<uint32_t>(m_fallback_mvec_image.usage);
 
-	sl::ResourceTag tags[4] = {
-		sl::ResourceTag(&in_color_res, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate),
-		sl::ResourceTag(&out_color_res, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate),
-		sl::ResourceTag(&depth_res, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate),
-		sl::ResourceTag(&mvec_res, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate),
-	};
+	std::vector<sl::ResourceTag> tags;
+	tags.emplace_back(&in_color_res, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate);
+	tags.emplace_back(&out_color_res, sl::kBufferTypeScalingOutputColor,
+	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate);
+	tags.emplace_back(&depth_res, sl::kBufferTypeDepth,
+	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate);
+	tags.emplace_back(&mvec_res, sl::kBufferTypeMotionVectors,
+	                  m_fg_active ? sl::ResourceLifecycle::eValidUntilPresent : sl::ResourceLifecycle::eValidUntilEvaluate);
+	if (m_fg_active) {
+		tags.emplace_back(&out_color_res, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent);
+	}
 
 	sl::ViewportHandle viewport(m_viewport_id);
 	sl::FrameToken* frame_token = nullptr;
@@ -694,7 +719,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		return false;
 	}
 
-	res = slSetTagForFrame(*frame_token, viewport, tags, 4, static_cast<sl::CommandBuffer*>(cmd_buffer));
+	res = slSetTagForFrame(*frame_token, viewport, tags.data(), static_cast<uint32_t>(tags.size()), static_cast<sl::CommandBuffer*>(cmd_buffer));
 	if (res != sl::Result::eOk) {
 		LOGF("[DLSS] slSetTagForFrame failed: %d\n", static_cast<int>(res));
 		return false;
@@ -822,29 +847,79 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 }
 
 std::string DLSSManager::GetOverlayInfo() const {
-	if (!m_settings.enabled || m_settings.mode == DLSSMode::Off) {
+	if (!m_settings.enabled && !m_settings.fg_enabled) {
 		return "DLSS: Off";
 	}
 	const auto st = m_status.load();
 	if (st == DLSSStatus::Active) {
 		std::string fg_str;
 		if (m_settings.fg_enabled && m_fg_active) {
-			fg_str = fmt::format(" + {}", DLSSGModeToString(m_settings.fg_mode));
+			fg_str = fmt::format(" + {} ({}x)", DLSSGModeToString(m_settings.fg_mode), m_presented_multiplier);
 		}
 		std::string reflex_str;
 		if (m_settings.fg_enabled || m_settings.reflex_mode != ReflexMode::Off) {
 			reflex_str = fmt::format(" | {}", ReflexModeToString(m_settings.reflex_mode));
 		}
-		return fmt::format("DLSS: Active ({} {}x{}->{}x{}){}{}",
-		                   DLSSModeToString(m_settings.mode),
-		                   m_prev_input_extent.width, m_prev_input_extent.height,
-		                   m_prev_target_extent.width, m_prev_target_extent.height,
-		                   fg_str, reflex_str);
+		if (m_settings.enabled && m_settings.mode != DLSSMode::Off) {
+			return fmt::format("DLSS: Active ({} {}x{}->{}x{}){}{}",
+			                   DLSSModeToString(m_settings.mode),
+			                   m_prev_input_extent.width, m_prev_input_extent.height,
+			                   m_prev_target_extent.width, m_prev_target_extent.height,
+			                   fg_str, reflex_str);
+		} else {
+			return fmt::format("DLSS: Native{}{}", fg_str, reflex_str);
+		}
 	}
 	if (st == DLSSStatus::Available) {
 		return fmt::format("DLSS: Ready ({})", DLSSModeToString(m_settings.mode));
 	}
 	return fmt::format("DLSS: {}", DLSSStatusToString(st));
+}
+
+VkResult DLSSManager::QueuePresent(VkQueue queue, const VkPresentInfoKHR* presentInfo) {
+	if (m_pfn_vkQueuePresentKHR != nullptr) {
+		return m_pfn_vkQueuePresentKHR(queue, presentInfo);
+	}
+	return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+bool DLSSManager::HasQueuePresentProxy() const noexcept {
+	return m_available && (m_pfn_vkQueuePresentKHR != nullptr);
+}
+
+VkResult DLSSManager::AcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
+                                       VkSemaphore semaphore, VkFence fence, uint32_t* imageIndex) {
+	if (m_pfn_vkAcquireNextImageKHR != nullptr) {
+		return m_pfn_vkAcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, imageIndex);
+	}
+	return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+bool DLSSManager::HasAcquireNextImageProxy() const noexcept {
+	return m_available && (m_pfn_vkAcquireNextImageKHR != nullptr);
+}
+
+VkResult DLSSManager::CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* createInfo,
+                                      const VkAllocationCallbacks* allocator, VkSwapchainKHR* swapchain) {
+	if (m_pfn_vkCreateSwapchainKHR != nullptr) {
+		return m_pfn_vkCreateSwapchainKHR(device, createInfo, allocator, swapchain);
+	}
+	return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+bool DLSSManager::HasCreateSwapchainProxy() const noexcept {
+	return m_available && (m_pfn_vkCreateSwapchainKHR != nullptr);
+}
+
+void DLSSManager::DestroySwapchain(VkDevice device, VkSwapchainKHR swapchain,
+                                   const VkAllocationCallbacks* allocator) {
+	if (m_pfn_vkDestroySwapchainKHR != nullptr) {
+		m_pfn_vkDestroySwapchainKHR(device, swapchain, allocator);
+	}
+}
+
+bool DLSSManager::HasDestroySwapchainProxy() const noexcept {
+	return m_available && (m_pfn_vkDestroySwapchainKHR != nullptr);
 }
 
 } // namespace Libs::Graphics

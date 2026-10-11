@@ -484,8 +484,19 @@ void Swapchain::Create() {
 		create_info.presentMode = vk::PresentModeKHR::eFifo;
 	}
 	create_info.clipped = VK_TRUE;
-	RequireVulkanSuccess(graphics.device.createSwapchainKHR(&create_info, nullptr, &m_handle),
-	                     "vkCreateSwapchainKHR");
+	if (DLSSManager::Instance().HasCreateSwapchainProxy()) {
+		VkSwapchainKHR sc = VK_NULL_HANDLE;
+		const auto res = DLSSManager::Instance().CreateSwapchain(
+			static_cast<VkDevice>(graphics.device),
+			reinterpret_cast<const VkSwapchainCreateInfoKHR*>(&create_info),
+			nullptr,
+			&sc);
+		m_handle = sc;
+		RequireVulkanSuccess(static_cast<vk::Result>(res), "vkCreateSwapchainKHR");
+	} else {
+		RequireVulkanSuccess(graphics.device.createSwapchainKHR(&create_info, nullptr, &m_handle),
+		                     "vkCreateSwapchainKHR");
+	}
 	EXIT_IF(m_handle == nullptr);
 
 	m_images = EnumerateVulkan<vk::Image>(
@@ -582,7 +593,14 @@ void Swapchain::Destroy() {
 		}
 	}
 	if (m_handle != nullptr) {
-		graphics.device.destroySwapchainKHR(m_handle, nullptr);
+		if (DLSSManager::Instance().HasDestroySwapchainProxy()) {
+			DLSSManager::Instance().DestroySwapchain(
+				static_cast<VkDevice>(graphics.device),
+				static_cast<VkSwapchainKHR>(m_handle),
+				nullptr);
+		} else {
+			graphics.device.destroySwapchainKHR(m_handle, nullptr);
+		}
 	}
 
 	m_handle        = nullptr;
@@ -667,10 +685,21 @@ Swapchain::Status Swapchain::AcquireNextImage(CommandScheduler& scheduler) {
 		scheduler.Wait(m_frame_ticks[m_frame_index]);
 		m_frame_ticks[m_frame_index] = 0;
 	}
-	m_image_index     = static_cast<uint32_t>(-1);
-	const auto result = m_window.graphic_ctx.device.acquireNextImageKHR(
-	    m_handle, std::numeric_limits<uint64_t>::max(), m_image_acquired[m_frame_index], nullptr,
-	    &m_image_index);
+	vk::Result result;
+	if (DLSSManager::Instance().HasAcquireNextImageProxy()) {
+		const auto res = DLSSManager::Instance().AcquireNextImage(
+			static_cast<VkDevice>(m_window.graphic_ctx.device),
+			static_cast<VkSwapchainKHR>(m_handle),
+			std::numeric_limits<uint64_t>::max(),
+			static_cast<VkSemaphore>(m_image_acquired[m_frame_index]),
+			VK_NULL_HANDLE,
+			&m_image_index);
+		result = static_cast<vk::Result>(res);
+	} else {
+		result = m_window.graphic_ctx.device.acquireNextImageKHR(
+			m_handle, std::numeric_limits<uint64_t>::max(), m_image_acquired[m_frame_index], nullptr,
+			&m_image_index);
+	}
 	switch (result) {
 		case vk::Result::eSuccess: break;
 		case vk::Result::eSuboptimalKHR:
@@ -1205,7 +1234,14 @@ Swapchain::Status Swapchain::Present() {
 		Common::LockGuard lock(m_window.graphic_ctx.queue_mutex);
 		m_window.graphic_ctx.submission_queue.DrainReadyForPresentLocked();
 		DLSSManager::Instance().SetPresentMarker(true);
-		result = m_window.graphic_ctx.queue.presentKHR(&present);
+		if (DLSSManager::Instance().HasQueuePresentProxy()) {
+			const auto res = DLSSManager::Instance().QueuePresent(
+				static_cast<VkQueue>(m_window.graphic_ctx.queue),
+				reinterpret_cast<const VkPresentInfoKHR*>(&present));
+			result = static_cast<vk::Result>(res);
+		} else {
+			result = m_window.graphic_ctx.queue.presentKHR(&present);
+		}
 		DLSSManager::Instance().SetPresentMarker(false);
 	}
 	switch (result) {
