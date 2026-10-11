@@ -162,7 +162,25 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 			}
 		}
 
-		if (!target_res.empty()) {
+		bool user_has_enabled_resolution_mod = false;
+		std::string user_enabled_mod_name;
+		for (auto& entry: entries) {
+			if (entry.enabled && entry.name.find("render resolution") != std::string::npos) {
+				if (!user_has_enabled_resolution_mod) {
+					user_has_enabled_resolution_mod = true;
+					user_enabled_mod_name = entry.name;
+				} else {
+					// Disable conflicting extra resolution mods if multiple were enabled in file
+					entry.enabled = false;
+				}
+			}
+		}
+
+		if (user_has_enabled_resolution_mod) {
+			Log::WriteToConsoleAndLog(fmt::format(
+			    "Game patch: [DLSS] Keeping user-configured mod \"{}\" (DLSS will upscale from it)\n",
+			    user_enabled_mod_name));
+		} else if (!target_res.empty()) {
 			bool found_match = false;
 			for (const auto& entry: entries) {
 				if (entry.name.find("render resolution") != std::string::npos &&

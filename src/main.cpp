@@ -307,6 +307,30 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 
 		if (arg == "--dlss") {
 			options.config.dlss_enabled = true;
+			if (i + 1 < argc) {
+				std::string next_val = argv[i + 1];
+				std::string lower_val = next_val;
+				std::transform(lower_val.begin(), lower_val.end(), lower_val.begin(), ::tolower);
+				if (lower_val == "ultraperformance" || lower_val == "ultra_performance" || lower_val == "ultra-performance") {
+					options.config.dlss_mode = 1;
+					i++;
+				} else if (lower_val == "performance") {
+					options.config.dlss_mode = 2;
+					i++;
+				} else if (lower_val == "balanced") {
+					options.config.dlss_mode = 3;
+					i++;
+				} else if (lower_val == "quality") {
+					options.config.dlss_mode = 4;
+					i++;
+				} else if (lower_val == "dlaa") {
+					options.config.dlss_mode = 5;
+					i++;
+				} else if (lower_val == "off") {
+					options.config.dlss_mode = 0;
+					i++;
+				}
+			}
 			continue;
 		}
 
@@ -318,6 +342,24 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		if (arg == "--dlss-fg") {
 			options.config.dlss_enabled = true;
 			options.config.dlss_fg_enabled = true;
+			if (i + 1 < argc) {
+				std::string next_val = argv[i + 1];
+				std::string lower_val = next_val;
+				std::transform(lower_val.begin(), lower_val.end(), lower_val.begin(), ::tolower);
+				if (lower_val == "2x" || lower_val == "on" || lower_val == "2") {
+					options.config.dlss_fg_mode = 1;
+					i++;
+				} else if (lower_val == "3x" || lower_val == "3") {
+					options.config.dlss_fg_mode = 2;
+					i++;
+				} else if (lower_val == "4x" || lower_val == "4") {
+					options.config.dlss_fg_mode = 3;
+					i++;
+				} else if (lower_val == "dynamic") {
+					options.config.dlss_fg_mode = 4;
+					i++;
+				}
+			}
 			continue;
 		}
 
@@ -542,17 +584,19 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 			}
 			options.config.keymap.push_back(value);
 		} else if (arg == "--dlss-mode") {
-			if (value == "UltraPerformance" || value == "ultra_performance") {
+			std::string lower_val = value;
+			std::transform(lower_val.begin(), lower_val.end(), lower_val.begin(), ::tolower);
+			if (lower_val == "ultraperformance" || lower_val == "ultra_performance" || lower_val == "ultra-performance") {
 				options.config.dlss_mode = 1;
-			} else if (value == "Performance" || value == "performance") {
+			} else if (lower_val == "performance") {
 				options.config.dlss_mode = 2;
-			} else if (value == "Balanced" || value == "balanced") {
+			} else if (lower_val == "balanced") {
 				options.config.dlss_mode = 3;
-			} else if (value == "Quality" || value == "quality") {
+			} else if (lower_val == "quality") {
 				options.config.dlss_mode = 4;
-			} else if (value == "DLAA" || value == "dlaa") {
+			} else if (lower_val == "dlaa") {
 				options.config.dlss_mode = 5;
-			} else if (value == "Off" || value == "off") {
+			} else if (lower_val == "off") {
 				options.config.dlss_mode = 0;
 			} else {
 				uint32_t mode_val = 0;
