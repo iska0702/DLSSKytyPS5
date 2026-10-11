@@ -84,7 +84,7 @@ Performance improvements are not guaranteed. Actual results depend on the implem
 
 Experimental DLSS-related patches are included for selected game identifiers:
 
-- **Bloodborne / Demon's Souls:** `PPSA01325`
+- **ASTRO PLAYROOM:** `PPSA01325`
 - **ASTRO BOT:** `PPSA21567`
 
 Compatibility depends on the specific game version and patch implementation. These patches are not guaranteed to work across all versions or configurations.
