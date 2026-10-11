@@ -419,7 +419,9 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
                                    vk::Extent2D target_extent) {
 	if (m_output_image.image != nullptr && m_output_extent.width == target_extent.width &&
 	    m_output_extent.height == target_extent.height &&
-	    m_depth_extent.width == input_extent.width && m_depth_extent.height == input_extent.height) {
+	    m_depth_extent.width == input_extent.width && m_depth_extent.height == input_extent.height &&
+	    m_applied_mode == m_settings.mode && m_applied_sharpness == m_settings.sharpness &&
+	    m_applied_preset == m_settings.preset && m_applied_fg_mode == m_settings.fg_mode) {
 		return true;
 	}
 
@@ -566,6 +568,11 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 			     opt.renderWidthMax, opt.renderHeightMax);
 		}
 	}
+
+	m_applied_mode      = m_settings.mode;
+	m_applied_sharpness = m_settings.sharpness;
+	m_applied_preset    = m_settings.preset;
+	m_applied_fg_mode   = m_settings.fg_mode;
 
 	return true;
 }
@@ -880,6 +887,11 @@ void DLSSManager::ReleaseResources(GraphicContext& graphics) {
 	m_output_extent = {};
 
 	DestroyFallbackBuffers(graphics);
+
+	m_applied_mode      = DLSSMode::Off;
+	m_applied_sharpness = -1.0f;
+	m_applied_preset    = DLSSPreset::Default;
+	m_applied_fg_mode   = DLSSGMode::Off;
 }
 
 void DLSSManager::Shutdown(GraphicContext& graphics) {

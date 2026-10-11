@@ -102,6 +102,7 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 
 		std::string target_res;
 		if (target_w <= 1920 && target_h <= 1080) {
+			// 1080p (FHD) display target
 			switch (dlss_mode) {
 				case Libs::Graphics::DLSSMode::UltraPerformance:
 					target_res = "640x360";
@@ -119,8 +120,29 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 				default:
 					break;
 			}
+		} else if (target_w <= 2560 && target_h <= 1440) {
+			// 1440p (QHD / 2K) display target
+			switch (dlss_mode) {
+				case Libs::Graphics::DLSSMode::UltraPerformance:
+					target_res = "640x360";
+					break;
+				case Libs::Graphics::DLSSMode::Performance:
+					target_res = "960x540";
+					break;
+				case Libs::Graphics::DLSSMode::Balanced:
+					target_res = "1280x720";
+					break;
+				case Libs::Graphics::DLSSMode::Quality:
+					target_res = "1920x1080";
+					break;
+				case Libs::Graphics::DLSSMode::DLAA:
+					target_res = "2432x1368";
+					break;
+				default:
+					break;
+			}
 		} else {
-			// Higher output resolution (e.g. 1440p or 4K)
+			// 4K (UHD) display target
 			switch (dlss_mode) {
 				case Libs::Graphics::DLSSMode::UltraPerformance:
 					target_res = "1280x720";
