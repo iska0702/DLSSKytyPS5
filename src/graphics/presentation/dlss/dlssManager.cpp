@@ -23,17 +23,16 @@ static void StreamlineLogCallback(sl::LogType type, const char* msg) {
 	}
 	switch (type) {
 		case sl::LogType::eError:
-			std::fprintf(stderr, "[Streamline/DLSS][Error] %s\n", msg);
+			Log::WriteToConsoleAndLog(fmt::format("[Streamline/DLSS][Error] {}\n", msg));
 			break;
 		case sl::LogType::eWarn:
-			std::printf("[Streamline/DLSS][Warn] %s\n", msg);
+			Log::WriteToConsoleAndLog(fmt::format("[Streamline/DLSS][Warn] {}\n", msg));
 			break;
 		case sl::LogType::eInfo:
 		default:
-			std::printf("[Streamline/DLSS][Info] %s\n", msg);
+			Log::WriteToConsoleAndLog(fmt::format("[Streamline/DLSS][Info] {}\n", msg));
 			break;
 	}
-	std::fflush(stdout);
 }
 
 static sl::DLSSMode ConvertDLSSMode(DLSSMode mode) noexcept {
@@ -471,12 +470,23 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	// Set DLSS Options in Streamline
 	sl::ViewportHandle viewport(m_viewport_id);
 	sl::DLSSOptions dlss_options {};
-	auto effective_mode = m_settings.mode;
-	if (input_extent.width >= target_extent.width && input_extent.height >= target_extent.height &&
-	    effective_mode != DLSSMode::Off && effective_mode != DLSSMode::DLAA) {
-		effective_mode = DLSSMode::DLAA;
+	// Auto-detect optimal DLSS mode based on the ratio of input render resolution to target output resolution
+	m_effective_mode = m_settings.mode;
+	if (input_extent.width > 0 && target_extent.width > 0 && m_settings.mode != DLSSMode::Off) {
+		const float scale = static_cast<float>(input_extent.width) / static_cast<float>(target_extent.width);
+		if (scale >= 0.95f) {
+			m_effective_mode = DLSSMode::DLAA;
+		} else if (scale >= 0.62f) { // ~67% Quality
+			m_effective_mode = DLSSMode::Quality;
+		} else if (scale >= 0.54f) { // ~58% Balanced
+			m_effective_mode = DLSSMode::Balanced;
+		} else if (scale >= 0.40f) { // ~50% Performance
+			m_effective_mode = DLSSMode::Performance;
+		} else {                     // ~33% Ultra Performance
+			m_effective_mode = DLSSMode::UltraPerformance;
+		}
 	}
-	dlss_options.mode = ConvertDLSSMode(effective_mode);
+	dlss_options.mode = ConvertDLSSMode(m_effective_mode);
 	dlss_options.outputWidth = target_extent.width;
 	dlss_options.outputHeight = target_extent.height;
 	dlss_options.sharpness = m_settings.sharpness;
@@ -558,15 +568,16 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 		slReflexSetOptions(reflex_options);
 	}
 
-	if (m_settings.diagnostics) {
-		sl::DLSSOptimalSettings opt {};
-		if (slDLSSGetOptimalSettings(dlss_options, opt) == sl::Result::eOk) {
-			LOGF("[DLSS][Diag] Mode: %s (Effective: %s), Target: %ux%u, Optimal Render: %ux%u (Min: %ux%u, Max: %ux%u)\n",
-			     DLSSModeToString(m_settings.mode), DLSSModeToString(effective_mode),
-			     target_extent.width, target_extent.height,
-			     opt.optimalRenderWidth, opt.optimalRenderHeight, opt.renderWidthMin, opt.renderHeightMin,
-			     opt.renderWidthMax, opt.renderHeightMax);
-		}
+	sl::DLSSOptimalSettings opt {};
+	if (slDLSSGetOptimalSettings(dlss_options, opt) == sl::Result::eOk) {
+		Log::WriteToConsoleAndLog(fmt::format(
+		    "[DLSS][Info] Mode: {} (Effective: {}), Input: {}x{}, Target: {}x{}, Optimal: {}x{} (Range: {}x{} .. {}x{})\n",
+		    DLSSModeToString(m_settings.mode), DLSSModeToString(m_effective_mode),
+		    input_extent.width, input_extent.height,
+		    target_extent.width, target_extent.height,
+		    opt.optimalRenderWidth, opt.optimalRenderHeight,
+		    opt.renderWidthMin, opt.renderHeightMin,
+		    opt.renderWidthMax, opt.renderHeightMax));
 	}
 
 	m_applied_mode      = m_settings.mode;
@@ -844,7 +855,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		if (res != sl::Result::eOk) {
 			m_status = DLSSStatus::Error;
 			m_status_message = fmt::format("slEvaluateFeature failed: {}", static_cast<int>(res));
-			LOGF("[DLSS] %s\n", m_status_message.c_str());
+			Log::WriteToConsoleAndLog(fmt::format("[DLSS] {}\n", m_status_message));
 			return false;
 		}
 
@@ -872,19 +883,70 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		}
 
 		m_status = DLSSStatus::Active;
-		m_status_message = fmt::format("DLSS Active: {} -> {}",
-		                               DLSSModeToString(m_settings.mode),
-		                               fmt::format("{}x{}", target_extent.width, target_extent.height));
+		m_status_message = fmt::format("DLSS Active: {} ({}x{} -> {}x{})",
+		                               DLSSModeToString(m_effective_mode),
+		                               source_extent.width, source_extent.height,
+		                               target_extent.width, target_extent.height);
 		out_upscaled_image = &m_output_image;
 	} else {
-		// Super Resolution is off or downscaling; only Frame Generation / Reflex is active
+		// Super Resolution is off or downscaling; populate m_output_image by blitting source_image
+		// so Streamline's Frame Generation HUDLessColor/ScalingOutputColor buffer is fully valid!
+		{
+			vk::ImageMemoryBarrier to_dst {};
+			to_dst.sType               = vk::StructureType::eImageMemoryBarrier;
+			to_dst.oldLayout           = vk::ImageLayout::eGeneral;
+			to_dst.newLayout           = vk::ImageLayout::eTransferDstOptimal;
+			to_dst.srcAccessMask       = vk::AccessFlagBits {};
+			to_dst.dstAccessMask       = vk::AccessFlagBits::eTransferWrite;
+			to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_dst.image               = m_output_image.image;
+			to_dst.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+			cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+			                           vk::PipelineStageFlagBits::eTransfer,
+			                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_dst);
+
+			vk::ImageBlit region {};
+			region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+			region.srcSubresource.mipLevel       = 0;
+			region.srcSubresource.baseArrayLayer = 0;
+			region.srcSubresource.layerCount     = 1;
+			region.srcOffsets[1].x               = static_cast<int>(source_extent.width);
+			region.srcOffsets[1].y               = static_cast<int>(source_extent.height);
+			region.srcOffsets[1].z               = 1;
+			region.dstSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
+			region.dstSubresource.mipLevel       = 0;
+			region.dstSubresource.baseArrayLayer = 0;
+			region.dstSubresource.layerCount     = 1;
+			region.dstOffsets[1].x               = static_cast<int>(target_extent.width);
+			region.dstOffsets[1].y               = static_cast<int>(target_extent.height);
+			region.dstOffsets[1].z               = 1;
+			cmd_buffer.blitImage(source_image.image, vk::ImageLayout::eShaderReadOnlyOptimal,
+			                     m_output_image.image, vk::ImageLayout::eTransferDstOptimal, 1,
+			                     &region, vk::Filter::eLinear);
+
+			vk::ImageMemoryBarrier to_src {};
+			to_src.sType               = vk::StructureType::eImageMemoryBarrier;
+			to_src.oldLayout           = vk::ImageLayout::eTransferDstOptimal;
+			to_src.newLayout           = vk::ImageLayout::eTransferSrcOptimal;
+			to_src.srcAccessMask       = vk::AccessFlagBits::eTransferWrite;
+			to_src.dstAccessMask       = vk::AccessFlagBits::eTransferRead;
+			to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_src.image               = m_output_image.image;
+			to_src.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+			cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+			                           vk::PipelineStageFlagBits::eAllCommands,
+			                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_src);
+		}
+
 		if (m_reflex_supported) {
 			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
 		}
 		m_last_frame_token = frame_token;
 		m_status = DLSSStatus::Active;
 		m_status_message = "DLSS-G Active (Native)";
-		out_upscaled_image = nullptr;
+		out_upscaled_image = &m_output_image;
 	}
 	return true;
 }
@@ -971,20 +1033,20 @@ std::string DLSSManager::GetOverlayInfo() const {
 		std::string fg_str;
 		if (m_settings.fg_enabled && m_fg_active) {
 			const uint32_t mult = GetEffectiveMultiplier();
-			fg_str = fmt::format(" + {} ({}x)", DLSSGModeToString(m_settings.fg_mode), mult);
+			fg_str = fmt::format(" + FG {}x", mult);
 		}
 		std::string reflex_str;
 		if (m_settings.fg_enabled || m_settings.reflex_mode != ReflexMode::Off) {
 			reflex_str = fmt::format(" | {}", ReflexModeToString(m_settings.reflex_mode));
 		}
 		return fmt::format("DLSS: Active ({} {}x{}->{}x{}){}{}",
-		                   DLSSModeToString(m_settings.mode),
+		                   DLSSModeToString(m_effective_mode),
 		                   m_prev_input_extent.width, m_prev_input_extent.height,
 		                   m_prev_target_extent.width, m_prev_target_extent.height,
 		                   fg_str, reflex_str);
 	}
 	if (st == DLSSStatus::Available) {
-		return fmt::format("DLSS: Ready ({})", DLSSModeToString(m_settings.mode));
+		return fmt::format("DLSS: Ready ({})", DLSSModeToString(m_effective_mode));
 	}
 	return fmt::format("DLSS: {}", DLSSStatusToString(st));
 }

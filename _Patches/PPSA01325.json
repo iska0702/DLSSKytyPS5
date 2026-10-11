@@ -55,609 +55,8 @@
             "name": "Decouple gameplay timers from render FPS"
         },
         {
-            "enabled": false,
-            "memory": [
-                {
-                    "off": "bb70080000",
-                    "offset": "0x1d59e8d",
-                    "on": "bb38040000"
-                },
-                {
-                    "off": "41bc000f0000",
-                    "offset": "0x1d59e92",
-                    "on": "41bc80070000"
-                },
-                {
-                    "off": "bb38040000",
-                    "offset": "0x1d59e9f",
-                    "on": "bb38040000"
-                },
-                {
-                    "off": "41bc80070000",
-                    "offset": "0x1d59ea4",
-                    "on": "41bc80070000"
-                },
-                {
-                    "off": "41bc38040000",
-                    "offset": "0x1c2beb1",
-                    "on": "41bc38040000"
-                },
-                {
-                    "off": "41be80070000",
-                    "offset": "0x1c2beb7",
-                    "on": "41be80070000"
-                },
-                {
-                    "off": "41bc70080000",
-                    "offset": "0x1c2bec4",
-                    "on": "41bc38040000"
-                },
-                {
-                    "off": "41be000f0000",
-                    "offset": "0x1c2beca",
-                    "on": "41be80070000"
-                },
-                {
-                    "off": "ba80070000",
-                    "offset": "0x1c2bf80",
-                    "on": "ba80070000"
-                },
-                {
-                    "off": "b938040000",
-                    "offset": "0x1c2bf89",
-                    "on": "b938040000"
-                },
-                {
-                    "off": "ba000f0000",
-                    "offset": "0x1c2bfe6",
-                    "on": "ba80070000"
-                },
-                {
-                    "off": "b970080000",
-                    "offset": "0x1c2bff5",
-                    "on": "b938040000"
-                },
-                {
-                    "off": "41be70080000",
-                    "offset": "0x1c2e5f7",
-                    "on": "41be38040000"
-                },
-                {
-                    "off": "bb000f0000",
-                    "offset": "0x1c2e5fd",
-                    "on": "bb80070000"
-                },
-                {
-                    "off": "41be38040000",
-                    "offset": "0x1c2e604",
-                    "on": "41be38040000"
-                },
-                {
-                    "off": "bb80070000",
-                    "offset": "0x1c2e60a",
-                    "on": "bb80070000"
-                }
-            ],
-            "name": "Fixed render resolution 1920x1080"
-        },
-        {
-            "enabled": false,
-            "memory": [
-                {
-                    "off": "bb70080000",
-                    "offset": "0x1d59e8d",
-                    "on": "bb58050000"
-                },
-                {
-                    "off": "41bc000f0000",
-                    "offset": "0x1d59e92",
-                    "on": "41bc80090000"
-                },
-                {
-                    "off": "bb38040000",
-                    "offset": "0x1d59e9f",
-                    "on": "bb58050000"
-                },
-                {
-                    "off": "41bc80070000",
-                    "offset": "0x1d59ea4",
-                    "on": "41bc80090000"
-                },
-                {
-                    "off": "41bc38040000",
-                    "offset": "0x1c2beb1",
-                    "on": "41bc58050000"
-                },
-                {
-                    "off": "41be80070000",
-                    "offset": "0x1c2beb7",
-                    "on": "41be80090000"
-                },
-                {
-                    "off": "41bc70080000",
-                    "offset": "0x1c2bec4",
-                    "on": "41bc58050000"
-                },
-                {
-                    "off": "41be000f0000",
-                    "offset": "0x1c2beca",
-                    "on": "41be80090000"
-                },
-                {
-                    "off": "ba80070000",
-                    "offset": "0x1c2bf80",
-                    "on": "ba80090000"
-                },
-                {
-                    "off": "b938040000",
-                    "offset": "0x1c2bf89",
-                    "on": "b958050000"
-                },
-                {
-                    "off": "ba000f0000",
-                    "offset": "0x1c2bfe6",
-                    "on": "ba80090000"
-                },
-                {
-                    "off": "b970080000",
-                    "offset": "0x1c2bff5",
-                    "on": "b958050000"
-                },
-                {
-                    "off": "41be70080000",
-                    "offset": "0x1c2e5f7",
-                    "on": "41be58050000"
-                },
-                {
-                    "off": "bb000f0000",
-                    "offset": "0x1c2e5fd",
-                    "on": "bb80090000"
-                },
-                {
-                    "off": "41be38040000",
-                    "offset": "0x1c2e604",
-                    "on": "41be58050000"
-                },
-                {
-                    "off": "bb80070000",
-                    "offset": "0x1c2e60a",
-                    "on": "bb80090000"
-                }
-            ],
-            "name": "Fixed render resolution 2432x1368"
-        },
-        {
-            "enabled": false,
-            "memory": [
-                {
-                    "off": "bb70080000",
-                    "offset": "0x1d59e8d",
-                    "on": "bb50070000"
-                },
-                {
-                    "off": "41bc000f0000",
-                    "offset": "0x1d59e92",
-                    "on": "41bc000d0000"
-                },
-                {
-                    "off": "bb38040000",
-                    "offset": "0x1d59e9f",
-                    "on": "bb50070000"
-                },
-                {
-                    "off": "41bc80070000",
-                    "offset": "0x1d59ea4",
-                    "on": "41bc000d0000"
-                },
-                {
-                    "off": "41bc38040000",
-                    "offset": "0x1c2beb1",
-                    "on": "41bc50070000"
-                },
-                {
-                    "off": "41be80070000",
-                    "offset": "0x1c2beb7",
-                    "on": "41be000d0000"
-                },
-                {
-                    "off": "41bc70080000",
-                    "offset": "0x1c2bec4",
-                    "on": "41bc50070000"
-                },
-                {
-                    "off": "41be000f0000",
-                    "offset": "0x1c2beca",
-                    "on": "41be000d0000"
-                },
-                {
-                    "off": "ba80070000",
-                    "offset": "0x1c2bf80",
-                    "on": "ba000d0000"
-                },
-                {
-                    "off": "b938040000",
-                    "offset": "0x1c2bf89",
-                    "on": "b950070000"
-                },
-                {
-                    "off": "ba000f0000",
-                    "offset": "0x1c2bfe6",
-                    "on": "ba000d0000"
-                },
-                {
-                    "off": "b970080000",
-                    "offset": "0x1c2bff5",
-                    "on": "b950070000"
-                },
-                {
-                    "off": "41be70080000",
-                    "offset": "0x1c2e5f7",
-                    "on": "41be50070000"
-                },
-                {
-                    "off": "bb000f0000",
-                    "offset": "0x1c2e5fd",
-                    "on": "bb000d0000"
-                },
-                {
-                    "off": "41be38040000",
-                    "offset": "0x1c2e604",
-                    "on": "41be50070000"
-                },
-                {
-                    "off": "bb80070000",
-                    "offset": "0x1c2e60a",
-                    "on": "bb000d0000"
-                }
-            ],
-            "name": "Fixed render resolution 3328x1872"
-        },
-        {
-            "enabled": false,
-            "memory": [
-                {
-                    "off": "bb70080000",
-                    "offset": "0x1d59e8d",
-                    "on": "bb70080000"
-                },
-                {
-                    "off": "41bc000f0000",
-                    "offset": "0x1d59e92",
-                    "on": "41bc000f0000"
-                },
-                {
-                    "off": "bb38040000",
-                    "offset": "0x1d59e9f",
-                    "on": "bb70080000"
-                },
-                {
-                    "off": "41bc80070000",
-                    "offset": "0x1d59ea4",
-                    "on": "41bc000f0000"
-                },
-                {
-                    "off": "41bc38040000",
-                    "offset": "0x1c2beb1",
-                    "on": "41bc70080000"
-                },
-                {
-                    "off": "41be80070000",
-                    "offset": "0x1c2beb7",
-                    "on": "41be000f0000"
-                },
-                {
-                    "off": "41bc70080000",
-                    "offset": "0x1c2bec4",
-                    "on": "41bc70080000"
-                },
-                {
-                    "off": "41be000f0000",
-                    "offset": "0x1c2beca",
-                    "on": "41be000f0000"
-                },
-                {
-                    "off": "ba80070000",
-                    "offset": "0x1c2bf80",
-                    "on": "ba000f0000"
-                },
-                {
-                    "off": "b938040000",
-                    "offset": "0x1c2bf89",
-                    "on": "b970080000"
-                },
-                {
-                    "off": "ba000f0000",
-                    "offset": "0x1c2bfe6",
-                    "on": "ba000f0000"
-                },
-                {
-                    "off": "b970080000",
-                    "offset": "0x1c2bff5",
-                    "on": "b970080000"
-                },
-                {
-                    "off": "41be70080000",
-                    "offset": "0x1c2e5f7",
-                    "on": "41be70080000"
-                },
-                {
-                    "off": "bb000f0000",
-                    "offset": "0x1c2e5fd",
-                    "on": "bb000f0000"
-                },
-                {
-                    "off": "41be38040000",
-                    "offset": "0x1c2e604",
-                    "on": "41be70080000"
-                },
-                {
-                    "off": "bb80070000",
-                    "offset": "0x1c2e60a",
-                    "on": "bb000f0000"
-                }
-            ],
-            "name": "Fixed render resolution 3840x2160"
-        },
-        {
-            "enabled": false,
-            "memory": [
-                {
-                    "offset": "0x1d59e8d",
-                    "off": "bb70080000",
-                    "on": "bbd0020000"
-                },
-                {
-                    "offset": "0x1d59e92",
-                    "off": "41bc000f0000",
-                    "on": "41bc00050000"
-                },
-                {
-                    "offset": "0x1d59e9f",
-                    "off": "bb38040000",
-                    "on": "bbd0020000"
-                },
-                {
-                    "offset": "0x1d59ea4",
-                    "off": "41bc80070000",
-                    "on": "41bc00050000"
-                },
-                {
-                    "offset": "0x1c2beb1",
-                    "off": "41bc38040000",
-                    "on": "41bcd0020000"
-                },
-                {
-                    "offset": "0x1c2beb7",
-                    "off": "41be80070000",
-                    "on": "41be00050000"
-                },
-                {
-                    "offset": "0x1c2bec4",
-                    "off": "41bc70080000",
-                    "on": "41bcd0020000"
-                },
-                {
-                    "offset": "0x1c2beca",
-                    "off": "41be000f0000",
-                    "on": "41be00050000"
-                },
-                {
-                    "offset": "0x1c2bf80",
-                    "off": "ba80070000",
-                    "on": "ba00050000"
-                },
-                {
-                    "offset": "0x1c2bf89",
-                    "off": "b938040000",
-                    "on": "b9d0020000"
-                },
-                {
-                    "offset": "0x1c2bfe6",
-                    "off": "ba000f0000",
-                    "on": "ba00050000"
-                },
-                {
-                    "offset": "0x1c2bff5",
-                    "off": "b970080000",
-                    "on": "b9d0020000"
-                },
-                {
-                    "offset": "0x1c2e5f7",
-                    "off": "41be70080000",
-                    "on": "41bed0020000"
-                },
-                {
-                    "offset": "0x1c2e5fd",
-                    "off": "bb000f0000",
-                    "on": "bb00050000"
-                },
-                {
-                    "offset": "0x1c2e604",
-                    "off": "41be38040000",
-                    "on": "41bed0020000"
-                },
-                {
-                    "offset": "0x1c2e60a",
-                    "off": "bb80070000",
-                    "on": "bb00050000"
-                }
-            ],
-            "name": "Fixed render resolution 1280x720"
-        },
-        {
-            "enabled": false,
-            "memory": [
-                {
-                    "offset": "0x1d59e8d",
-                    "off": "bb70080000",
-                    "on": "bb1c020000"
-                },
-                {
-                    "offset": "0x1d59e92",
-                    "off": "41bc000f0000",
-                    "on": "41bcc0030000"
-                },
-                {
-                    "offset": "0x1d59e9f",
-                    "off": "bb38040000",
-                    "on": "bb1c020000"
-                },
-                {
-                    "offset": "0x1d59ea4",
-                    "off": "41bc80070000",
-                    "on": "41bcc0030000"
-                },
-                {
-                    "offset": "0x1c2beb1",
-                    "off": "41bc38040000",
-                    "on": "41bc1c020000"
-                },
-                {
-                    "offset": "0x1c2beb7",
-                    "off": "41be80070000",
-                    "on": "41bec0030000"
-                },
-                {
-                    "offset": "0x1c2bec4",
-                    "off": "41bc70080000",
-                    "on": "41bc1c020000"
-                },
-                {
-                    "offset": "0x1c2beca",
-                    "off": "41be000f0000",
-                    "on": "41bec0030000"
-                },
-                {
-                    "offset": "0x1c2bf80",
-                    "off": "ba80070000",
-                    "on": "bac0030000"
-                },
-                {
-                    "offset": "0x1c2bf89",
-                    "off": "b938040000",
-                    "on": "b91c020000"
-                },
-                {
-                    "offset": "0x1c2bfe6",
-                    "off": "ba000f0000",
-                    "on": "bac0030000"
-                },
-                {
-                    "offset": "0x1c2bff5",
-                    "off": "b970080000",
-                    "on": "b91c020000"
-                },
-                {
-                    "offset": "0x1c2e5f7",
-                    "off": "41be70080000",
-                    "on": "41be1c020000"
-                },
-                {
-                    "offset": "0x1c2e5fd",
-                    "off": "bb000f0000",
-                    "on": "bbc0030000"
-                },
-                {
-                    "offset": "0x1c2e604",
-                    "off": "41be38040000",
-                    "on": "41be1c020000"
-                },
-                {
-                    "offset": "0x1c2e60a",
-                    "off": "bb80070000",
-                    "on": "bbc0030000"
-                }
-            ],
-            "name": "Fixed render resolution 960x540"
-        },
-        {
-            "enabled": false,
-            "memory": [
-                {
-                    "offset": "0x1d59e8d",
-                    "off": "bb70080000",
-                    "on": "bb68010000"
-                },
-                {
-                    "offset": "0x1d59e92",
-                    "off": "41bc000f0000",
-                    "on": "41bc80020000"
-                },
-                {
-                    "offset": "0x1d59e9f",
-                    "off": "bb38040000",
-                    "on": "bb68010000"
-                },
-                {
-                    "offset": "0x1d59ea4",
-                    "off": "41bc80070000",
-                    "on": "41bc80020000"
-                },
-                {
-                    "offset": "0x1c2beb1",
-                    "off": "41bc38040000",
-                    "on": "41bc68010000"
-                },
-                {
-                    "offset": "0x1c2beb7",
-                    "off": "41be80070000",
-                    "on": "41be80020000"
-                },
-                {
-                    "offset": "0x1c2bec4",
-                    "off": "41bc70080000",
-                    "on": "41bc68010000"
-                },
-                {
-                    "offset": "0x1c2beca",
-                    "off": "41be000f0000",
-                    "on": "41be80020000"
-                },
-                {
-                    "offset": "0x1c2bf80",
-                    "off": "ba80070000",
-                    "on": "ba80020000"
-                },
-                {
-                    "offset": "0x1c2bf89",
-                    "off": "b938040000",
-                    "on": "b968010000"
-                },
-                {
-                    "offset": "0x1c2bfe6",
-                    "off": "ba000f0000",
-                    "on": "ba80020000"
-                },
-                {
-                    "offset": "0x1c2bff5",
-                    "off": "b970080000",
-                    "on": "b968010000"
-                },
-                {
-                    "offset": "0x1c2e5f7",
-                    "off": "41be70080000",
-                    "on": "41be68010000"
-                },
-                {
-                    "offset": "0x1c2e5fd",
-                    "off": "bb000f0000",
-                    "on": "bb80020000"
-                },
-                {
-                    "offset": "0x1c2e604",
-                    "off": "41be38040000",
-                    "on": "41be68010000"
-                },
-                {
-                    "offset": "0x1c2e60a",
-                    "off": "bb80070000",
-                    "on": "bb80020000"
-                }
-            ],
-            "name": "Fixed render resolution 640x360"
-        },
-        {
-            "enabled": false,
+            "enabled": true,
+            "name": "Fixed render resolution: QHD DLSS Quality (1708x960)",
             "memory": [
                 {
                     "off": "bb70080000",
@@ -738,12 +137,199 @@
                     "off": "bb80070000",
                     "offset": "0x1c2e60a",
                     "on": "bbac060000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8ac060000c0030000"
                 }
-            ],
-            "name": "Fixed render resolution 1708x960"
+            ]
         },
         {
             "enabled": false,
+            "name": "Fixed render resolution: QHD DLSS Balanced (1486x840)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb48030000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bcce050000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb48030000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bcce050000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc48030000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41bece050000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc48030000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41bece050000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "bace050000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b948030000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "bace050000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b948030000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be48030000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bbce050000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be48030000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bbce050000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8ce05000048030000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: QHD DLSS Performance (1280x720)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b800050000d0020000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: QHD DLSS Ultra Performance (854x480)",
             "memory": [
                 {
                     "off": "bb70080000",
@@ -824,9 +410,1105 @@
                     "off": "bb80070000",
                     "offset": "0x1c2e60a",
                     "on": "bb56030000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b856030000e0010000"
                 }
-            ],
-            "name": "Fixed render resolution 854x480"
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: 4K DLSS Quality (2560x1440)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bba0050000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc000a0000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bba0050000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc000a0000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bca0050000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be000a0000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bca0050000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be000a0000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba000a0000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9a0050000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba000a0000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9a0050000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bea0050000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb000a0000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bea0050000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb000a0000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8000a0000a0050000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: 4K DLSS Balanced (2228x1252)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbe4040000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bcb4080000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbe4040000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bcb4080000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bce4040000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41beb4080000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bce4040000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41beb4080000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "bab4080000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9e4040000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "bab4080000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9e4040000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bee4040000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bbb4080000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bee4040000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bbb4080000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8b4080000e4040000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: 4K DLSS Performance (1920x1080)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb38040000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc80070000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb38040000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc80070000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc38040000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be80070000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc38040000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be80070000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba80070000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b938040000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba80070000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b938040000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be38040000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb80070000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be38040000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb80070000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b88007000038040000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: 4K DLSS Ultra Performance (1280x720)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b800050000d0020000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: FHD DLSS Quality (1280x720)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b800050000d0020000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: FHD DLSS Balanced (1114x648)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb88020000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc5a040000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb88020000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc5a040000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc88020000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be5a040000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc88020000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be5a040000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba5a040000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b988020000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba5a040000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b988020000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be88020000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb5a040000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be88020000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb5a040000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b85a04000088020000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: FHD DLSS Performance (960x540)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb1c020000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bcc0030000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb1c020000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bcc0030000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc1c020000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41bec0030000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc1c020000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41bec0030000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "bac0030000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b91c020000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "bac0030000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b91c020000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be1c020000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bbc0030000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be1c020000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bbc0030000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8c00300001c020000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: FHD DLSS Ultra Performance (640x360)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb68010000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc80020000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb68010000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc80020000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc68010000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be80020000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc68010000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be80020000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba80020000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b968010000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba80020000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b968010000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be68010000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb80020000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be68010000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb80020000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b88002000068010000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: HD DLSS Quality (854x480)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbe0010000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc56030000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbe0010000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc56030000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bce0010000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be56030000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bce0010000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be56030000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba56030000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9e0010000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba56030000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9e0010000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bee0010000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb56030000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bee0010000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb56030000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b856030000e0010000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: HD DLSS Balanced (744x432)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbb0010000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bce8020000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbb0010000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bce8020000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bcb0010000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41bee8020000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bcb0010000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41bee8020000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "bae8020000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9b0010000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "bae8020000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9b0010000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41beb0010000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bbe8020000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41beb0010000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bbe8020000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8e8020000b0010000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: HD DLSS Performance (640x360)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb68010000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc80020000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb68010000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc80020000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc68010000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be80020000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc68010000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be80020000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba80020000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b968010000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba80020000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b968010000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be68010000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb80020000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be68010000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb80020000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b88002000068010000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: HD DLSS Ultra Performance (428x240)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbf0000000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bcac010000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbf0000000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bcac010000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bcf0000000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41beac010000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bcf0000000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41beac010000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "baac010000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9f0000000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "baac010000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9f0000000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bef0000000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bbac010000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bef0000000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bbac010000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8ac010000f0000000"
+                }
+            ]
         }
     ],
     "name": "ASTRO's PLAYROOM: elapsed-time FPS unlock + NO ray-traced GI + fixed render resolution (experimental / sin probar)",

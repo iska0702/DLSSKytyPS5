@@ -1836,14 +1836,21 @@ KYTY_SYSV_ABI int VideoOutGetOutputStatus(int handle, VideoOutOutputStatus* stat
 	int32_t attribute3 = 0;
 	Loader::SystemContentParamSfoGetInt("ATTRIBUTE3", &attribute3);
 	ctx->mutex.Lock();
-	// Primary output reports 4K only if host screen is 4K and DLSS is not downscaling.
-	// Otherwise report 1080p so unpatched games do not default to 4K internal rendering.
-	if (Config::GetScreenWidth() >= 3840 && Config::GetScreenHeight() >= 2160 && !Config::DLSSEnabled()) {
-		status->resolution = 2u;
-	} else if (Config::GetScreenWidth() >= 2560 && Config::GetScreenHeight() >= 1440 && !Config::DLSSEnabled()) {
-		status->resolution = 3u;
-	} else {
+	// PS5 VideoOut output resolution enum:
+	// 0u = 1080p (1920x1080)
+	// 1u = 2160p / 4K (3840x2160)
+	// 2u = 1440p (2560x1440)
+	// When DLSS Super Resolution is enabled, report 1080p (0u) to the PS5 game so that
+	// the game's internal presentation and framebuffers are created at 1920x1080,
+	// allowing DLSS to upscale 1080p -> 1440p or 4K.
+	if (Config::DLSSEnabled() && Config::GetDLSSMode() != 0) {
+		status->resolution = 0u;
+	} else if (Config::GetScreenWidth() >= 3840 && Config::GetScreenHeight() >= 2160) {
 		status->resolution = 1u;
+	} else if (Config::GetScreenWidth() >= 2560 && Config::GetScreenHeight() >= 1440) {
+		status->resolution = 2u;
+	} else {
+		status->resolution = 0u;
 	}
 	status->dynamicRange = 1;
 	status->refreshRate =

@@ -257,13 +257,14 @@ bool ValidateGame(const Plan& plan, const Program* main_program, std::string* er
 	return true;
 }
 
-void Translate(const Program& program, uint64_t source_base, uint64_t source_address,
+void Translate(const Program& program, int64_t offset_shift, uint64_t source_address,
                uint64_t* target_address) {
-	if (source_address >= source_base) {
-		*target_address = program.base_vaddr + source_address - source_base;
+	const int64_t target_rva = static_cast<int64_t>(source_address) + offset_shift;
+	if (target_rva < 0) {
+		*target_address = 0;
 		return;
 	}
-	*target_address = program.base_vaddr - (source_base - source_address);
+	*target_address = program.base_vaddr + static_cast<uint64_t>(target_rva);
 }
 
 bool IsInsideProgram(const Program& program, uint64_t address, size_t size) {
@@ -275,9 +276,9 @@ bool IsZero(const std::vector<uint8_t>& bytes) {
 	return std::all_of(bytes.begin(), bytes.end(), [](uint8_t byte) { return byte == 0; });
 }
 
-bool TranslateAndValidate(Plan* plan, const Program& program, uint64_t source_base) {
+bool TranslateAndValidate(Plan* plan, const Program& program, int64_t offset_shift) {
 	for (auto& write: plan->writes) {
-		Translate(program, source_base, write.source_address, &write.target_address);
+		Translate(program, offset_shift, write.source_address, &write.target_address);
 		if (!IsZero(write.off) &&
 		    (!IsInsideProgram(program, write.target_address, write.off.size()) ||
 		     std::memcmp(reinterpret_cast<const void*>(write.target_address), write.off.data(),
@@ -288,7 +289,7 @@ bool TranslateAndValidate(Plan* plan, const Program& program, uint64_t source_ba
 	return true;
 }
 
-bool Matches(Plan* plan, const Program& program, uint64_t* source_base) {
+bool Matches(Plan* plan, const Program& program, int64_t* offset_shift) {
 	const auto anchor = std::find_if(plan->writes.begin(), plan->writes.end(),
 	                                 [](const Write& write) { return !IsZero(write.off); });
 	if (anchor == plan->writes.end() || program.mapped_size < anchor->off.size()) {
@@ -312,11 +313,10 @@ bool Matches(Plan* plan, const Program& program, uint64_t* source_base) {
 				break;
 			}
 			const auto rva = static_cast<uint64_t>(found - begin) + segment.p_vaddr;
-			if (anchor->source_address >= rva) {
-				*source_base = anchor->source_address - rva;
-				if (TranslateAndValidate(plan, program, *source_base)) {
-					return true;
-				}
+			const int64_t shift = static_cast<int64_t>(rva) - static_cast<int64_t>(anchor->source_address);
+			if (TranslateAndValidate(plan, program, shift)) {
+				*offset_shift = shift;
+				return true;
 			}
 			current = found + 1;
 		}
@@ -417,14 +417,15 @@ bool Apply(const std::filesystem::path& plan_path, Program* main_program,
 }
 
 bool ApplyPending(Program* program) {
-	uint64_t source_base = 0;
+	int64_t offset_shift = 0;
 	if (g_pending_plan == nullptr || program == nullptr || program->elf == nullptr ||
-	    !Matches(g_pending_plan.get(), *program, &source_base)) {
+	    !Matches(g_pending_plan.get(), *program, &offset_shift)) {
 		return true;
 	}
-	::printf("Game cheat: matched %s with source base 0x%llx\n",
-	         program->file_name.filename().string().c_str(),
-	         static_cast<unsigned long long>(source_base));
+	Log::WriteToConsoleAndLog(fmt::format(
+	    "Game cheat: matched {} with offset shift 0x{:x}\n",
+	    program->file_name.filename().string(),
+	    static_cast<unsigned long long>(offset_shift)));
 
 	std::string error;
 	if (!ApplyWrites(g_pending_plan.get(), *program, &error)) {

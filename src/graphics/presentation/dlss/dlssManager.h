@@ -160,6 +160,7 @@ private:
 	void*                   m_last_frame_token      = nullptr;
 
 	DLSSMode                m_applied_mode          = DLSSMode::Off;
+	DLSSMode                m_effective_mode        = DLSSMode::Quality;
 	float                   m_applied_sharpness     = -1.0f;
 	DLSSPreset              m_applied_preset        = DLSSPreset::Default;
 	DLSSGMode               m_applied_fg_mode       = DLSSGMode::Off;
