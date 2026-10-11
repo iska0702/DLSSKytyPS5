@@ -489,11 +489,23 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	       graphics.side_queue_index != 0 ? "queue 1" : "shared with queue 0", queue_family,
 	       family_queue_count);
 
-	const std::array<float, 2> queue_priorities {1.0f, 1.0f};
+	static constexpr std::array<float, 8> queue_priorities {
+		1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f
+	};
+	const uint32_t host_queues = graphics.side_queue_index != 0 ? 2u : 1u;
+	graphics.streamline_queue_start = host_queues;
+	const uint32_t total_family_queues =
+		std::min(family_queue_count, static_cast<uint32_t>(queue_priorities.size()));
+	const uint32_t requested_queues = std::max(host_queues, total_family_queues);
+	graphics.streamline_queue_count =
+		requested_queues > host_queues ? (requested_queues - host_queues) : 0u;
+	std::printf("Kyty Vulkan queues allocated: %u (host: %u, Streamline: %u)\n",
+	            requested_queues, host_queues, graphics.streamline_queue_count);
+
 	std::array<vk::DeviceQueueCreateInfo, 2> queue_create_infos {};
 	auto&                      queue_create_info = queue_create_infos[0];
 	queue_create_info.queueFamilyIndex = queue_family;
-	queue_create_info.queueCount       = graphics.side_queue_index != 0 ? 2u : 1u;
+	queue_create_info.queueCount       = requested_queues;
 	queue_create_info.pQueuePriorities = queue_priorities.data();
 	// KYTY_UPLOAD_DMA: one queue of a transfer-only family (the copy engines), for UploadDma.
 	// Not under RenderDoc, whose captures of the extra queue are not needed for analysis.

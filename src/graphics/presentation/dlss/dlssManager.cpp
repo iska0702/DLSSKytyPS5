@@ -172,14 +172,42 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 		std::fflush(stdout);
 	}
 
+	sl::FeatureRequirements reqs_dlss {};
+	sl::FeatureRequirements reqs_dlss_g {};
+	uint32_t extra_compute_queues = 0;
+	uint32_t extra_graphics_queues = 0;
+	if (slGetFeatureRequirements(sl::kFeatureDLSS, reqs_dlss) == sl::Result::eOk) {
+		extra_compute_queues += reqs_dlss.vkNumComputeQueuesRequired;
+		extra_graphics_queues += reqs_dlss.vkNumGraphicsQueuesRequired;
+		std::printf("[DLSS] DLSS feature requirements: compute queues=%u, graphics queues=%u\n",
+		            reqs_dlss.vkNumComputeQueuesRequired, reqs_dlss.vkNumGraphicsQueuesRequired);
+	}
+	if (slGetFeatureRequirements(sl::kFeatureDLSS_G, reqs_dlss_g) == sl::Result::eOk) {
+		extra_compute_queues += reqs_dlss_g.vkNumComputeQueuesRequired;
+		extra_graphics_queues += reqs_dlss_g.vkNumGraphicsQueuesRequired;
+		std::printf("[DLSS] DLSS-G feature requirements: compute queues=%u, graphics queues=%u, opticalFlow queues=%u\n",
+		            reqs_dlss_g.vkNumComputeQueuesRequired, reqs_dlss_g.vkNumGraphicsQueuesRequired,
+		            reqs_dlss_g.vkNumOpticalFlowQueuesRequired);
+	}
+	std::printf("[DLSS] Streamline requested extra queues: compute=%u, graphics=%u\n",
+	            extra_compute_queues, extra_graphics_queues);
+
+	const uint32_t host_queues = graphics.streamline_queue_start;
+	const uint32_t compute_queues_reserved = (std::max)(extra_compute_queues, 1u);
+
 	sl::VulkanInfo vk_info {};
 	vk_info.device = static_cast<VkDevice>(graphics.device);
 	vk_info.instance = static_cast<VkInstance>(graphics.instance);
 	vk_info.physicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
-	vk_info.graphicsQueueFamily = graphics.queue_family;
-	vk_info.graphicsQueueIndex = 0;
 	vk_info.computeQueueFamily = graphics.queue_family;
-	vk_info.computeQueueIndex = graphics.side_queue_index != 0 ? graphics.side_queue_index : 0;
+	vk_info.computeQueueIndex = host_queues;
+	vk_info.graphicsQueueFamily = graphics.queue_family;
+	vk_info.graphicsQueueIndex = host_queues + compute_queues_reserved;
+
+	std::printf("[DLSS] Configuring Streamline Vulkan queues: host queues=%u, computeQueue=(family %u, index %u), graphicsQueue=(family %u, index %u)\n",
+	            host_queues, vk_info.computeQueueFamily, vk_info.computeQueueIndex,
+	            vk_info.graphicsQueueFamily, vk_info.graphicsQueueIndex);
+	std::fflush(stdout);
 
 	res = slSetVulkanInfo(vk_info);
 	if (res != sl::Result::eOk) {

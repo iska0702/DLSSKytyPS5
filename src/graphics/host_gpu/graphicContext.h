@@ -116,6 +116,10 @@ struct GraphicContext {
 	// UploadDma worker submits to it. Buffers it touches are created shared by both families.
 	uint32_t                           transfer_queue_family = static_cast<uint32_t>(-1);
 	vk::Queue                          transfer_queue        = nullptr;
+	// Streamline / DLSS queue configuration:
+	// Starting index and number of queues allocated for Streamline features in queue_family.
+	uint32_t                           streamline_queue_start = 1;
+	uint32_t                           streamline_queue_count = 0;
 
 	[[nodiscard]] const vk::PhysicalDeviceProperties& GetPhysicalDeviceProperties() const {
 		return physical_device_properties;
