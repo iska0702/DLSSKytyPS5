@@ -6,6 +6,14 @@
 #include "graphics/host_gpu/vulkanCommon.h"
 #include "graphics/presentation/dlss/dlssConfig.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#endif
+
 #include <atomic>
 #include <memory>
 #include <string>
@@ -79,6 +87,17 @@ public:
 	                      const VkAllocationCallbacks* allocator);
 	[[nodiscard]] bool HasDestroySwapchainProxy() const noexcept;
 
+#if defined(_WIN32)
+	VkResult CreateWin32Surface(VkInstance instance, const VkWin32SurfaceCreateInfoKHR* createInfo,
+	                            const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface);
+	VkResult CreateWin32SurfaceForHwnd(VkInstance instance, HWND hwnd, VkSurfaceKHR* out_surface);
+	[[nodiscard]] bool HasCreateWin32SurfaceProxy() const noexcept;
+
+	void DestroySurface(VkInstance instance, VkSurfaceKHR surface,
+	                    const VkAllocationCallbacks* allocator = nullptr);
+	[[nodiscard]] bool HasDestroySurfaceProxy() const noexcept;
+#endif
+
 private:
 	bool SetupStreamline(GraphicContext& graphics);
 	void CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D extent);
@@ -99,6 +118,10 @@ private:
 	PFN_vkAcquireNextImageKHR m_pfn_vkAcquireNextImageKHR = nullptr;
 	PFN_vkCreateSwapchainKHR  m_pfn_vkCreateSwapchainKHR  = nullptr;
 	PFN_vkDestroySwapchainKHR m_pfn_vkDestroySwapchainKHR = nullptr;
+#if defined(_WIN32)
+	PFN_vkCreateWin32SurfaceKHR m_pfn_vkCreateWin32SurfaceKHR = nullptr;
+	PFN_vkDestroySurfaceKHR     m_pfn_vkDestroySurfaceKHR     = nullptr;
+#endif
 
 	// DLSS Intermediate Output Image (RGBA8 UNORM or format matching swapchain)
 	VulkanImage             m_output_image;

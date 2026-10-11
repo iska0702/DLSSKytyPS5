@@ -443,6 +443,10 @@ void Swapchain::Create() {
 	m_suboptimal          = false;
 
 	uint32_t image_count = surface.capabilities.minImageCount + 1;
+	if (DLSSManager::Instance().IsFGActive() ||
+	    (DLSSManager::Instance().IsFGSupported() && DLSSManager::Instance().GetSettings().fg_enabled)) {
+		image_count = std::max(image_count, 6u);
+	}
 	if (surface.capabilities.maxImageCount != 0) {
 		image_count = std::min(image_count, surface.capabilities.maxImageCount);
 	}

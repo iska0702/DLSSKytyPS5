@@ -155,9 +155,20 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 			GetProcAddress(hInterposer, "vkCreateSwapchainKHR"));
 		m_pfn_vkDestroySwapchainKHR = reinterpret_cast<PFN_vkDestroySwapchainKHR>(
 			GetProcAddress(hInterposer, "vkDestroySwapchainKHR"));
-		std::printf("[DLSS] Interposer Vulkan hooks resolved: QueuePresent=%p, AcquireNextImage=%p, CreateSwapchain=%p, DestroySwapchain=%p\n",
+#if defined(_WIN32)
+		m_pfn_vkCreateWin32SurfaceKHR = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
+			GetProcAddress(hInterposer, "vkCreateWin32SurfaceKHR"));
+		m_pfn_vkDestroySurfaceKHR = reinterpret_cast<PFN_vkDestroySurfaceKHR>(
+			GetProcAddress(hInterposer, "vkDestroySurfaceKHR"));
+#endif
+		std::printf("[DLSS] Interposer Vulkan hooks resolved: QueuePresent=%p, AcquireNextImage=%p, CreateSwapchain=%p, DestroySwapchain=%p, CreateWin32Surface=%p, DestroySurface=%p\n",
 		            (void*)m_pfn_vkQueuePresentKHR, (void*)m_pfn_vkAcquireNextImageKHR,
-		            (void*)m_pfn_vkCreateSwapchainKHR, (void*)m_pfn_vkDestroySwapchainKHR);
+		            (void*)m_pfn_vkCreateSwapchainKHR, (void*)m_pfn_vkDestroySwapchainKHR,
+#if defined(_WIN32)
+		            (void*)m_pfn_vkCreateWin32SurfaceKHR, (void*)m_pfn_vkDestroySurfaceKHR);
+#else
+		            nullptr, nullptr);
+#endif
 		std::fflush(stdout);
 	}
 
@@ -468,6 +479,7 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 			}
 		}
 		g_options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+		g_options.numBackBuffers = 6;
 		g_options.colorWidth = target_extent.width;
 		g_options.colorHeight = target_extent.height;
 		g_options.colorBufferFormat = static_cast<uint32_t>(m_output_image.format);
@@ -921,5 +933,43 @@ void DLSSManager::DestroySwapchain(VkDevice device, VkSwapchainKHR swapchain,
 bool DLSSManager::HasDestroySwapchainProxy() const noexcept {
 	return m_available && (m_pfn_vkDestroySwapchainKHR != nullptr);
 }
+
+#if defined(_WIN32)
+VkResult DLSSManager::CreateWin32Surface(VkInstance instance, const VkWin32SurfaceCreateInfoKHR* createInfo,
+                                        const VkAllocationCallbacks* allocator, VkSurfaceKHR* surface) {
+	if (m_pfn_vkCreateWin32SurfaceKHR != nullptr) {
+		return m_pfn_vkCreateWin32SurfaceKHR(instance, createInfo, allocator, surface);
+	}
+	return VK_ERROR_INITIALIZATION_FAILED;
+}
+
+VkResult DLSSManager::CreateWin32SurfaceForHwnd(VkInstance instance, HWND hwnd, VkSurfaceKHR* out_surface) {
+	if (!HasCreateWin32SurfaceProxy() || hwnd == nullptr || out_surface == nullptr) {
+		return VK_ERROR_INITIALIZATION_FAILED;
+	}
+	VkWin32SurfaceCreateInfoKHR create_info {};
+	create_info.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+	create_info.pNext     = nullptr;
+	create_info.flags     = 0;
+	create_info.hinstance = GetModuleHandle(nullptr);
+	create_info.hwnd      = hwnd;
+	return m_pfn_vkCreateWin32SurfaceKHR(instance, &create_info, nullptr, out_surface);
+}
+
+bool DLSSManager::HasCreateWin32SurfaceProxy() const noexcept {
+	return m_available && (m_pfn_vkCreateWin32SurfaceKHR != nullptr);
+}
+
+void DLSSManager::DestroySurface(VkInstance instance, VkSurfaceKHR surface,
+                                 const VkAllocationCallbacks* allocator) {
+	if (m_pfn_vkDestroySurfaceKHR != nullptr && surface != VK_NULL_HANDLE) {
+		m_pfn_vkDestroySurfaceKHR(instance, surface, allocator);
+	}
+}
+
+bool DLSSManager::HasDestroySurfaceProxy() const noexcept {
+	return m_available && (m_pfn_vkDestroySurfaceKHR != nullptr);
+}
+#endif
 
 } // namespace Libs::Graphics

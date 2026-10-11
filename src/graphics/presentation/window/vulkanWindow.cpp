@@ -1724,6 +1724,34 @@ void WindowContext::CreateVulkan() {
 		}
 	}
 
+#if defined(_WIN32)
+	if (DLSSManager::Instance().HasCreateWin32SurfaceProxy()) {
+		HWND hwnd = static_cast<HWND>(SDL_GetPointerProperty(
+			SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+		if (hwnd != nullptr) {
+			if (surface != nullptr) {
+				graphic_ctx.instance.destroySurfaceKHR(surface, nullptr);
+				surface = nullptr;
+			}
+			VkSurfaceKHR new_surface = VK_NULL_HANDLE;
+			const auto res = DLSSManager::Instance().CreateWin32SurfaceForHwnd(
+				static_cast<VkInstance>(graphic_ctx.instance), hwnd, &new_surface);
+			if (res == VK_SUCCESS && new_surface != VK_NULL_HANDLE) {
+				surface = new_surface;
+				RefreshSurfaceCapabilities();
+				LOGF("[DLSS] Successfully registered Vulkan Win32 surface with Streamline interposer (hwnd=%p)\n", (void*)hwnd);
+			} else {
+				LOGF("[DLSS] Failed to recreate surface via Streamline interposer: %d; falling back to SDL surface\n", static_cast<int>(res));
+				vk::SurfaceKHR::CType fallback_surface = VK_NULL_HANDLE;
+				if (SDL_Vulkan_CreateSurface(window, static_cast<vk::Instance::CType>(graphic_ctx.instance), nullptr, &fallback_surface)) {
+					surface = fallback_surface;
+					RefreshSurfaceCapabilities();
+				}
+			}
+		}
+	}
+#endif
+
 	presenter = std::make_unique<Presenter>(*this);
 }
 
@@ -1735,9 +1763,31 @@ void WindowContext::RefreshSurfaceCapabilities() {
 void WindowContext::RecreateSurface() {
 	EXIT_IF(window == nullptr || graphic_ctx.instance == nullptr);
 	if (surface != nullptr) {
+#if defined(_WIN32)
+		if (DLSSManager::Instance().HasDestroySurfaceProxy()) {
+			DLSSManager::Instance().DestroySurface(static_cast<VkInstance>(graphic_ctx.instance),
+			                                      static_cast<VkSurfaceKHR>(surface));
+		} else {
+			graphic_ctx.instance.destroySurfaceKHR(surface, nullptr);
+		}
+#else
 		graphic_ctx.instance.destroySurfaceKHR(surface, nullptr);
+#endif
 		surface = nullptr;
 	}
+#if defined(_WIN32)
+	HWND hwnd = static_cast<HWND>(SDL_GetPointerProperty(
+		SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
+	if (hwnd != nullptr && DLSSManager::Instance().HasCreateWin32SurfaceProxy()) {
+		VkSurfaceKHR new_surface = VK_NULL_HANDLE;
+		if (DLSSManager::Instance().CreateWin32SurfaceForHwnd(
+		        static_cast<VkInstance>(graphic_ctx.instance), hwnd, &new_surface) == VK_SUCCESS &&
+		    new_surface != VK_NULL_HANDLE) {
+			surface = new_surface;
+			return;
+		}
+	}
+#endif
 	vk::SurfaceKHR::CType native_surface = VK_NULL_HANDLE;
 	if (!SDL_Vulkan_CreateSurface(window, static_cast<vk::Instance::CType>(graphic_ctx.instance),
 	                              nullptr, &native_surface)) {
@@ -1751,6 +1801,19 @@ WindowContext::~WindowContext() {
 	presenter.reset();
 	LibKernel::Memory::InstallGpuResources(nullptr);
 	render_context.reset();
+	if (surface != nullptr) {
+#if defined(_WIN32)
+		if (DLSSManager::Instance().HasDestroySurfaceProxy()) {
+			DLSSManager::Instance().DestroySurface(static_cast<VkInstance>(graphic_ctx.instance),
+			                                      static_cast<VkSurfaceKHR>(surface));
+		} else {
+			graphic_ctx.instance.destroySurfaceKHR(surface, nullptr);
+		}
+#else
+		graphic_ctx.instance.destroySurfaceKHR(surface, nullptr);
+#endif
+		surface = nullptr;
+	}
 	DLSSManager::Instance().Shutdown(graphic_ctx);
 	graphic_ctx.submission_queue.Shutdown();
 
