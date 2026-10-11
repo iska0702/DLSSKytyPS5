@@ -1836,9 +1836,15 @@ KYTY_SYSV_ABI int VideoOutGetOutputStatus(int handle, VideoOutOutputStatus* stat
 	int32_t attribute3 = 0;
 	Loader::SystemContentParamSfoGetInt("ATTRIBUTE3", &attribute3);
 	ctx->mutex.Lock();
-	// Primary output reports 4K unless param.json Video-out Info enables resolution detection.
-	status->resolution =
-	    ((attribute3 & 4) != 0 && ctx->width < 3840 && ctx->height < 2160 ? 1u : 2u);
+	// Primary output reports 4K only if host screen is 4K and DLSS is not downscaling.
+	// Otherwise report 1080p so unpatched games do not default to 4K internal rendering.
+	if (Config::GetScreenWidth() >= 3840 && Config::GetScreenHeight() >= 2160 && !Config::DLSSEnabled()) {
+		status->resolution = 2u;
+	} else if (Config::GetScreenWidth() >= 2560 && Config::GetScreenHeight() >= 1440 && !Config::DLSSEnabled()) {
+		status->resolution = 3u;
+	} else {
+		status->resolution = 1u;
+	}
 	status->dynamicRange = 1;
 	status->refreshRate =
 	    (ctx->output_mode == VIDEO_OUT_OUTPUT_MODE_119_88HZ || Config::GetVblankFrequency() >= 119

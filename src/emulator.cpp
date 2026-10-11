@@ -218,7 +218,14 @@ void Run(const RunOptions& options) {
 
 	LoadElf(options.elf);
 
-	Execute(options.game_patch);
+	auto game_patch = options.game_patch;
+	if (game_patch.empty() && !title_id.empty()) {
+		const auto default_patch = std::filesystem::path("_Patches") / (title_id + ".json");
+		if (std::filesystem::exists(default_patch)) {
+			game_patch = default_patch;
+		}
+	}
+	Execute(game_patch);
 }
 
 } // namespace Emulator

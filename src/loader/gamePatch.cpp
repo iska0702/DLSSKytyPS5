@@ -1,9 +1,11 @@
 #include "loader/gamePatch.h"
 
 #include "common/assert.h"
+#include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include "common/stringUtils.h"
 #include "common/virtualMemory.h"
+#include "graphics/presentation/dlss/dlssConfig.h"
 #include "kernel/memory.h"
 #include "loader/elf.h"
 #include "loader/gamePatchFilter.h"
@@ -91,6 +93,80 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 		entry.enabled = mod.value("enabled", true);
 		entries.push_back(std::move(entry));
 	}
+
+	// Automatic internal render resolution selection when DLSS is active
+	if (Config::DLSSEnabled() && Config::GetDLSSMode() != static_cast<uint32_t>(Libs::Graphics::DLSSMode::Off)) {
+		const auto dlss_mode = static_cast<Libs::Graphics::DLSSMode>(Config::GetDLSSMode());
+		const auto target_w  = Config::GetScreenWidth();
+		const auto target_h  = Config::GetScreenHeight();
+
+		std::string target_res;
+		if (target_w <= 1920 && target_h <= 1080) {
+			switch (dlss_mode) {
+				case Libs::Graphics::DLSSMode::UltraPerformance:
+					target_res = "640x360";
+					break;
+				case Libs::Graphics::DLSSMode::Performance:
+					target_res = "960x540";
+					break;
+				case Libs::Graphics::DLSSMode::Balanced:
+				case Libs::Graphics::DLSSMode::Quality:
+					target_res = "1280x720";
+					break;
+				case Libs::Graphics::DLSSMode::DLAA:
+					target_res = "1920x1080";
+					break;
+				default:
+					break;
+			}
+		} else {
+			// Higher output resolution (e.g. 1440p or 4K)
+			switch (dlss_mode) {
+				case Libs::Graphics::DLSSMode::UltraPerformance:
+					target_res = "1280x720";
+					break;
+				case Libs::Graphics::DLSSMode::Performance:
+					target_res = "1920x1080";
+					break;
+				case Libs::Graphics::DLSSMode::Balanced:
+				case Libs::Graphics::DLSSMode::Quality:
+					target_res = "2432x1368";
+					break;
+				case Libs::Graphics::DLSSMode::DLAA:
+					target_res = "3840x2160";
+					break;
+				default:
+					break;
+			}
+		}
+
+		if (!target_res.empty()) {
+			bool found_match = false;
+			for (const auto& entry: entries) {
+				if (entry.name.find("render resolution") != std::string::npos &&
+				    entry.name.find(target_res) != std::string::npos) {
+					found_match = true;
+					break;
+				}
+			}
+
+			if (found_match) {
+				for (auto& entry: entries) {
+					if (entry.name.find("render resolution") != std::string::npos) {
+						if (entry.name.find(target_res) != std::string::npos) {
+							entry.enabled = true;
+							Log::WriteToConsoleAndLog(fmt::format(
+							    "Game patch: [DLSS] Auto-activated resolution mod \"{}\" for {}\n",
+							    entry.name, Libs::Graphics::DLSSModeToString(dlss_mode)));
+						} else {
+							entry.enabled = false;
+						}
+					}
+				}
+			}
+		}
+	}
+
 	const auto selection = SelectMods(entries, patterns);
 	for (size_t index = 0; index < entries.size(); index++) {
 		const char* reason = "applying";
