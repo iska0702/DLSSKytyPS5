@@ -55,6 +55,16 @@ public:
 	OcclusionCounter&   GetOcclusionCounter() { return m_occlusion_counter; }
 	LodStatsCounter&    GetLodStats() { return m_lod_stats; }
 
+	// Verified Astro's Playroom G-buffer producer. Access under GetMutex(); consumed
+	// at a guest flip, so a loading/menu frame cannot reuse old scene guides.
+	struct DLSSSceneGuides {
+		ImageId motion;
+		ImageId depth;
+		vk::Extent2D extent {};
+	};
+	DLSSSceneGuides dlss_scene_guides {};
+	DLSSSceneGuides dlss_verified_guides {};
+
 	[[nodiscard]] bool HandleFault(PageFaultAccess access, uint64_t fault_vaddr) noexcept;
 	[[nodiscard]] bool InvalidateMemory(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsMapped(uint64_t vaddr, uint64_t size) const noexcept;

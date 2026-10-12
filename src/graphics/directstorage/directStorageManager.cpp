@@ -20,6 +20,7 @@
 #include "common/stringUtils.h"
 
 #include <chrono>
+#include <cstdio>
 #include <system_error>
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
@@ -260,7 +261,7 @@ bool DirectStorageManager::Initialize(GraphicContext* graphics) {
 
 	m_available = true;
 	m_status_message = "DirectStorage + Vulkan initialized successfully";
-	LOGF("[DirectStorage] %s (GPU queue & Memory queue ready)\n", m_status_message.c_str());
+	std::printf("[DirectStorage] File I/O ready (GPU streaming is not integrated).\n");
 	return true;
 #endif
 }
@@ -269,10 +270,12 @@ void DirectStorageManager::Shutdown() {
 	Common::LockGuard lock(m_mutex);
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	if (m_gpu_queue) {
+		m_gpu_queue->Close();
 		m_gpu_queue->Release();
 		m_gpu_queue = nullptr;
 	}
 	if (m_memory_queue) {
+		m_memory_queue->Close();
 		m_memory_queue->Release();
 		m_memory_queue = nullptr;
 	}
@@ -305,7 +308,7 @@ bool DirectStorageManager::LoadFileToHostMemory(const std::filesystem::path& pat
 		*bytes_read = 0;
 	}
 
-	if (!IsEnabled() || !m_available) {
+	if (!IsEnabled()) {
 		return false;
 	}
 
@@ -317,6 +320,7 @@ bool DirectStorageManager::LoadFileToHostMemory(const std::filesystem::path& pat
 	return false;
 #else
 	Common::LockGuard lock(m_mutex);
+	if (!m_available || !m_memory_queue || !m_dstorage_factory) return false;
 	m_stats.total_requests++;
 	m_stats.file_to_memory_requests++;
 
@@ -345,6 +349,10 @@ bool DirectStorageManager::LoadFileToHostMemory(const std::filesystem::path& pat
 	}
 
 	const uint64_t readable_bytes = (std::min)(size, file_size - file_offset);
+	if (readable_bytes > DSTORAGE_STAGING_BUFFER_SIZE_32MB) {
+		++m_stats.fallback_count;
+		return false; // callers chunk large reads; never truncate to UINT32
+	}
 	if (readable_bytes == 0) {
 		return true;
 	}
@@ -369,11 +377,21 @@ bool DirectStorageManager::LoadFileToHostMemory(const std::filesystem::path& pat
 	m_memory_queue->EnqueueSetEvent(event_handle);
 	m_memory_queue->Submit();
 
-	WaitForSingleObject(event_handle, INFINITE);
+	const DWORD wait_result = WaitForSingleObject(event_handle, INFINITE);
+	if (wait_result != WAIT_OBJECT_0) {
+		// Stop all writes before the caller frees or reuses the destination buffer.
+		m_memory_queue->Close();
+		m_available = false;
+		++m_stats.error_count;
+		CloseHandle(event_handle);
+		LOGF("[DirectStorage] Completion wait failed: %lu\n", wait_result);
+		return false;
+	}
 	CloseHandle(event_handle);
 
 	DSTORAGE_ERROR_RECORD error_record {};
-	m_memory_queue->RetrieveErrorRecord(&error_record);
+	if (WaitForSingleObject(m_memory_queue->GetErrorEvent(), 0) == WAIT_OBJECT_0)
+		m_memory_queue->RetrieveErrorRecord(&error_record);
 	if (FAILED(error_record.FirstFailure.HResult)) {
 		m_stats.error_count++;
 		LOGF("[DirectStorage] Memory request failed: %s\n", HrToString(error_record.FirstFailure.HResult).c_str());
@@ -385,6 +403,11 @@ bool DirectStorageManager::LoadFileToHostMemory(const std::filesystem::path& pat
 	m_stats.last_read_duration_ms = elapsed_ms;
 	m_stats.total_read_time_ms += elapsed_ms;
 	m_stats.total_bytes_loaded += readable_bytes;
+	if (m_stats.file_to_memory_requests == 1 || m_stats.file_to_memory_requests % 1024 == 0) {
+		std::printf("[DirectStorage] Host I/O completed: requests=%llu bytes=%llu errors=%llu\n",
+		     m_stats.file_to_memory_requests, m_stats.total_bytes_loaded, m_stats.error_count);
+		std::fflush(stdout);
+	}
 
 	if (bytes_read) {
 		*bytes_read = readable_bytes;

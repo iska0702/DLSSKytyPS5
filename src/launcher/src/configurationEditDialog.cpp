@@ -225,9 +225,9 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	});
 
 #if defined(_WIN32)
-	m_directstorage_checkbox = new QCheckBox(tr("DirectStorage + Vulkan (Experimental)"), this);
+	m_directstorage_checkbox = new QCheckBox(tr("DirectStorage File I/O (Experimental)"), this);
 	m_directstorage_checkbox->setToolTip(
-	    tr("Enable Microsoft DirectStorage fast I/O and shared D3D12/Vulkan GPU streaming."));
+	    tr("Use Microsoft DirectStorage for file reads. GPU texture streaming and GPU decompression are not integrated."));
 	m_ui->compatibilityLayout->addWidget(m_directstorage_checkbox);
 #endif
 

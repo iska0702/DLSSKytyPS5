@@ -142,7 +142,7 @@ if (KYTY_LINKER STREQUAL LD AND NOT LINUX)
 	set(KYTY_LD_OPTIONS "-Wl,--image-base=0x100000000000")
 endif()
 
-project(Kyty${KYTY_PROJECT_NAME}${CMAKE_BUILD_TYPE}${KYTY_COMPILER} VERSION 0.3.0)
+project(Kyty${KYTY_PROJECT_NAME}${CMAKE_BUILD_TYPE}${KYTY_COMPILER} VERSION 0.3.1)
 
 include_directories(
 	${KYTY_THIRD_PARTY_DIR}/gtest/include
@@ -446,6 +446,8 @@ set(gpu_blit_shader_sources
 	"${gpu_tiler_shader_dir}/gpu_video_out_overlay.frag"
 	"${gpu_tiler_shader_dir}/gpu_video_out_downscale.frag"
 	"${gpu_tiler_shader_dir}/gpu_video_out_cas.frag"
+	"${gpu_tiler_shader_dir}/gpu_dlss_astro_motion.frag"
+	"${gpu_tiler_shader_dir}/gpu_dlss_depth.frag"
 )
 foreach(shader_source IN LISTS gpu_blit_shader_sources)
 	get_filename_component(shader_name "${shader_source}" NAME_WE)

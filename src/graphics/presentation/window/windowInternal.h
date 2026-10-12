@@ -33,6 +33,8 @@ struct SurfaceCapabilities {
 
 class PresentFilter final {
 public:
+	enum class Mode { Downscale, AstroMotion, Depth };
+	explicit PresentFilter(Mode mode): m_mode(mode) {}
 	PresentFilter()  = default;
 	~PresentFilter() = default;
 	KYTY_CLASS_NO_COPY(PresentFilter);
@@ -46,6 +48,7 @@ public:
 	void Release(vk::Device device);
 
 private:
+	Mode                    m_mode = Mode::Downscale;
 	vk::Format              m_format      = vk::Format::eUndefined;
 	vk::Sampler             m_sampler     = nullptr;
 	vk::DescriptorSetLayout m_descriptors = nullptr;

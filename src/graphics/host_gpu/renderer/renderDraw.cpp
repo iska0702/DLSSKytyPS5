@@ -55,6 +55,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <unordered_set>
 #include <span>
 #include <type_traits>
 #include <unordered_map>
@@ -840,7 +841,8 @@ struct DrawRenderState {
 		// its target resolution assigns every field of those (ResolveRenderColorTarget,
 		// ResolveRenderDepthTarget). Debug dumps also log color_info[0] and depth_info of draws
 		// without such targets, so they still get value-initialised entries.
-		if (!RenderStateFastEnabled(RenderStatePart::Reset) || graphics_debug_dump_enabled()) {
+		if (!RenderStateFastEnabled(RenderStatePart::Reset) || graphics_debug_dump_enabled() ||
+		    Config::DLSSDiagnosticsEnabled()) {
 			depth_info = {};
 			for (uint32_t slot = 0; slot < color_slots_written; slot++) {
 				color_info[slot] = {};
@@ -2622,9 +2624,81 @@ static void CommitIndexBuffer(const CommandSink& vk_buffer, const PreparedIndexB
 	vk_buffer.bindIndexBuffer(prepared.buffer, prepared.offset, prepared.type);
 }
 
+// Bound render targets are candidates, not proof of motion-vector/depth semantics.
+// Log their producer and descriptors for game-specific analysis without guessing.
+static void LogDLSSTargetInventory(const CommandBuffer& buffer, const DrawRenderState& state) {
+	if (!Config::DLSSDiagnosticsEnabled() || !state.ps_active ||
+	    state.ps_input_info.stage.program == nullptr) return;
+	const auto& pixel = state.ps_input_info.stage;
+	const auto& vertex = state.vertex_info[0].stage;
+	const auto ps_hash = pixel.program->shader_hash;
+	const auto vs_hash = vertex.program != nullptr ? vertex.program->shader_hash : 0;
+	static std::mutex mutex;
+	static std::unordered_set<std::string> seen;
+	const std::lock_guard lock(mutex);
+	if (seen.size() >= 512) return;
+	std::string key = fmt::format("{:016X}:{:016X}", vs_hash, ps_hash);
+	for (uint32_t i = 0; i < state.color_count; ++i) {
+		const auto& color = state.color_info[i];
+		const auto size = color.Extent();
+		key += fmt::format(":{}:{}:{}:{}", color.target_slot, size.width, size.height,
+		                   static_cast<uint32_t>(color.desc.view_info.format));
+	}
+	const auto& depth = state.depth_info;
+	if (depth.image_id) {
+		key += fmt::format(":D:{}:{}:{}:{}", depth.desc.info.extent.width,
+		                   depth.desc.info.extent.height,
+		                   static_cast<uint32_t>(depth.desc.view_info.format),
+		                   static_cast<uint32_t>(depth.depth_compare_op));
+	}
+	if (!seen.insert(key).second) return;
+	Log::WriteToConsoleAndLog(fmt::format(
+	    "[DLSS][GuestPass] frame={} VS={:016X} PS={:016X} colors={}\n",
+	    buffer.GetContext().GetGpu().GetFrameNum(), vs_hash, ps_hash, state.color_count));
+	for (uint32_t i = 0; i < state.color_count; ++i) {
+		const auto& color = state.color_info[i];
+		const auto size = color.Extent();
+		Log::WriteToConsoleAndLog(fmt::format(
+		    "[DLSS][GuestTarget] slot={} address=0x{:X} extent={}x{} format={} samples={}\n",
+		    color.target_slot, color.desc.info.data.address, size.width, size.height,
+		    vk::to_string(color.desc.view_info.format), color.desc.info.samples));
+	}
+	if (depth.image_id) {
+		Log::WriteToConsoleAndLog(fmt::format(
+		    "[DLSS][GuestDepth] address=0x{:X} extent={}x{} format={} compare={} writes={}\n",
+		    depth.desc.info.data.address, depth.desc.info.extent.width, depth.desc.info.extent.height,
+		    vk::to_string(depth.desc.view_info.format), vk::to_string(depth.depth_compare_op),
+		    depth.depth_write_enable));
+	}
+	for (const auto* stage : {&vertex, &pixel}) {
+		if (stage->program == nullptr || stage->resources == nullptr) continue;
+		const auto& resources = *stage->resources;
+		Log::WriteToConsoleAndLog(fmt::format(
+		    "[DLSS][GuestResources] shader={:016X} textures={} buffers={}\n",
+		    stage->program->shader_hash, resources.images.size(), resources.buffers.size()));
+		for (size_t i = 0; i < (std::min)(resources.images.size(), size_t{32}); ++i) {
+			const auto& descriptor = resources.images[i];
+			std::string words;
+			for (uint32_t j = 0; j < (std::min)(descriptor.dword_count, 8u); ++j) {
+				words += fmt::format(" {:08X}", descriptor.dwords[j]);
+			}
+			Log::WriteToConsoleAndLog(fmt::format("[DLSS][GuestTexture] index={} words={}\n", i, words));
+		}
+		for (size_t i = 0; i < (std::min)(resources.buffers.size(), size_t{32}); ++i) {
+			const auto& descriptor = resources.buffers[i];
+			std::string words;
+			for (uint32_t j = 0; j < (std::min)(descriptor.dword_count, 8u); ++j) {
+				words += fmt::format(" {:08X}", descriptor.dwords[j]);
+			}
+			Log::WriteToConsoleAndLog(fmt::format("[DLSS][GuestBuffer] index={} words={}\n", i, words));
+		}
+	}
+}
+
 static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo& draw,
 	                             const DrawRenderState& state, uint32_t index_type_and_size,
                                  const void* index_addr) {
+	LogDLSSTargetInventory(buffer, state);
 	if (!graphics_debug_dump_enabled()) {
 		return;
 	}
@@ -3383,6 +3457,32 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		}
 	}
 	CommitStats::Mark(CommitStats::Phase::AcquireTargets);
+	if (Config::DLSSEnabled() && state.ps_active && state.ps_input_info.stage.program != nullptr &&
+	    state.color_count == 5 && state.depth_info.image_id &&
+	    state.depth_info.desc.view_info.format == vk::Format::eD32SfloatS8Uint) {
+		// This shader exports current UV minus previous UV into MRT4. Other RG16
+		// targets are not assumed to be motion vectors.
+		for (uint32_t i = 0; i < state.color_count; ++i) {
+			const auto& color = state.color_info[i];
+			if (color.target_slot == 4 && color.desc.view_info.format == vk::Format::eR16G16Sfloat &&
+			    color.desc.info.samples == 1 &&
+			    color.desc.view_info.base_level == 0 && color.desc.view_info.layer_count == 1 &&
+			    (state.ps_input_info.stage.program->shader_hash == 0x00B2AAA5E8E98F3Full ||
+			     (color.image_id == m_context.dlss_verified_guides.motion &&
+			      state.depth_info.image_id == m_context.dlss_verified_guides.depth))) {
+				m_context.dlss_scene_guides = {color.image_id, state.depth_info.image_id, color.Extent()};
+				m_context.dlss_verified_guides = m_context.dlss_scene_guides;
+				if (Config::DLSSDiagnosticsEnabled()) {
+					static bool logged = false;
+					if (!logged) {
+						logged = true;
+						Log::WriteToConsoleAndLog(fmt::format("[DLSS] Native guide producer registered: {}x{}\n",
+						    color.Extent().width, color.Extent().height));
+					}
+				}
+			}
+		}
+	}
 
 	// Resource preparation above may synchronously finish and restart the scheduler. From this
 	// point onward, every operation targets the current command buffer and cannot touch guest

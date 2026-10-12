@@ -3,7 +3,11 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(cpuinfo)
 
 set(KYTY_PREBUILT_DIR "D:/Programs/KytyPS5-U59-Windows-x64")
-if(WIN32 AND EXISTS "${KYTY_PREBUILT_DIR}")
+if(WIN32 AND EXISTS "${KYTY_PREBUILT_DIR}/lib/Zydis.lib"
+	AND EXISTS "${KYTY_PREBUILT_DIR}/lib/Zycore.lib"
+	AND EXISTS "${KYTY_PREBUILT_DIR}/lib/opus.lib"
+	AND EXISTS "${KYTY_PREBUILT_DIR}/lib/zstd_static.lib"
+	AND EXISTS "${KYTY_PREBUILT_DIR}/include/zstd.h")
 	add_library(opus STATIC IMPORTED GLOBAL)
 	set_target_properties(opus PROPERTIES
 		IMPORTED_LOCATION "${KYTY_PREBUILT_DIR}/lib/opus.lib"
@@ -81,7 +85,7 @@ FetchContent_Declare(
 	xbyak
 	GIT_REPOSITORY https://github.com/herumi/xbyak.git
 	GIT_TAG 44a72f369268f7d552650891b296693e91db86bb
-	GIT_SHALLOW TRUE
+	GIT_SHALLOW FALSE
 )
 
 set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -93,7 +97,7 @@ FetchContent_Declare(
 	GIT_REPOSITORY https://github.com/zyantific/zydis.git
 	GIT_TAG 120e0e705f8e3b507dc49377ac2879979f0d545c
 	GIT_SUBMODULES_RECURSE TRUE
-	GIT_SHALLOW TRUE
+	GIT_SHALLOW FALSE
 )
 
 FetchContent_MakeAvailable(xbyak zydis)

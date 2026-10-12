@@ -153,7 +153,7 @@ static void PrintUsage() {
 	::printf("  --dlss-fg                           Enable DLSS Frame Generation (2x frame multiplier).\n");
 	::printf("  --dlss-mfg <3x|4x|dynamic>          Enable Multi-Frame Generation (3x, 4x, or dynamic).\n");
 	::printf("  --reflex <on|boost|off>             NVIDIA Reflex Low Latency mode. Default: on.\n");
-	::printf("  --directstorage                     Enable DirectStorage + Vulkan (Experimental).\n");
+	::printf("  --directstorage                     Enable DirectStorage file I/O (Experimental).\n");
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	::printf("  --redzone                            Protect the guest SysV red zone.\n");
 #endif

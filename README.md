@@ -9,7 +9,7 @@
 
 This project is a fork of [Jetsku/KytyPS5](https://github.com/Jetsku/KytyPS5), with experimental graphics enhancements and additional launcher configuration options.
 
-The fork explores DLSS integration, frame generation, Vulkan-based DirectStorage, game-specific compatibility patches, and image sharpening. These features are experimental and may not work as intended in every game.
+The fork explores DLSS integration, frame generation, DirectStorage file I/O, game-specific compatibility patches, and image sharpening. These features are experimental and may not work as intended in every game.
 
 - [NVIDIA DLSS & Frame Generation Guide](README_DLSS.md)
 - [Experimental Features and Known Limitations](docs/EXPERIMENTAL.md)
@@ -24,6 +24,17 @@ KytyPS5 is a PlayStation 5 emulator written in C++. This fork builds upon the ex
 
 > [!IMPORTANT]
 > This is an independent experimental fork. It is not affiliated with or endorsed by Sony Interactive Entertainment or NVIDIA. No games or proprietary PlayStation system software are distributed with this project.
+
+## v0.3.1 update (2026-10-12)
+
+- Astro's Playroom (`PPSA01325`, tested with v01.905.000) supplies verified native depth and motion vectors per prepared frame. Camera jitter and a separate HUD-free color pass still need integration; image quality remains experimental.
+- Streamline swapchain image queries and resource layouts are corrected for frame generation. Fixed MFG 4x was observed in runtime; unsupported multipliers are clamped and Vulkan Dynamic mode uses a supported fixed multiplier.
+- Zero sharpness now disables the CAS pass. DLSS feature support, history resets and evaluation failures are handled more accurately.
+- DirectStorage APR file reads use bounded CPU staging before copying into protected guest memory, with checked completion and standard-read fallback. Hardware integrity and EOF tests pass; actual game loading completed over 5,000 requests without recorded errors. GPU streaming/decompression are not integrated, and a loading speedup is not established.
+- Astro's experimental gameplay clock override is disabled by default. A reported windy-slope crash was a `!pos.IsNan()` physics assertion; restoring stock timing is a mitigation, not a confirmed fix for its origin.
+- Unhandled guest faults preserve original registers, code bytes and call chains in `_HangTrace/guest-fault-*.txt`.
+
+[DLSS runtime findings](docs/DLSS_RUNTIME_FINDINGS.md) ? [DirectStorage and crash findings](docs/DIRECTSTORAGE_RUNTIME_FINDINGS.md)
 
 ## NVIDIA DLSS Integration
 
@@ -69,16 +80,11 @@ Sharpening can improve perceived clarity, but excessive sharpening may introduce
 
 ### DirectStorage and Vulkan
 
-The fork explores experimental Microsoft DirectStorage integration with Vulkan-based GPU streaming.
+DirectStorage is connected to the APR host file-read path. Data is read into a bounded CPU staging buffer and then copied into guest memory on the emulator thread. A standard file-read fallback handles unavailable DirectStorage or failed requests.
 
-The intended goals include:
+The shared D3D12/Vulkan texture helper has no renderer callers. GPU texture streaming and GPU decompression are not integrated. The launcher option is named **DirectStorage File I/O (Experimental)**.
 
-- Exploring alternative asset-loading paths.
-- Reducing unnecessary data-transfer overhead.
-- Investigating GPU-assisted asset streaming.
-- Providing a launcher option for the experimental feature.
-
-Performance improvements are not guaranteed. Actual results depend on the implementation, storage device, driver support, and the emulator's asset-loading pipeline.
+Tests confirm correct file contents and EOF handling. The synchronous implementation has not demonstrated faster loading than ordinary file reads.
 
 ### Game-Specific Compatibility Patches
 
@@ -110,7 +116,7 @@ Current areas of interest include:
 - DLAA configuration.
 - Frame Generation experiments.
 - Image sharpening.
-- Vulkan-based DirectStorage experiments.
+- DirectStorage file I/O experiments.
 - Game-specific compatibility testing.
 - Launcher graphics configuration.
 
@@ -118,30 +124,13 @@ Compatibility, image quality, and performance may vary significantly between gam
 
 ## Known Limitations
 
-### Missing Motion Vectors and Depth Data
+### Temporal rendering inputs
 
-A major limitation of the current experimental DLSS approach is the lack of reliable game-generated motion vectors and scene depth data.
+Astro's Playroom now provides native motion vectors and depth through a verified G-buffer producer. The guide resources follow the prepared frame, include generation checks, and convert the game's motion direction and invalid-vector sentinel before DLSS uses them.
 
-The emulator captures the final color buffer through the `VideoOutSubmitFlip` presentation path, using `layers[0]`. This is not equivalent to accessing the game's complete internal rendering pipeline.
+Unsupported games and loading/menu frames use fallback motion (`R16G16_SFLOAT`, zero) and depth (`R32_SFLOAT`, 1.0). These fallback values do not describe scene movement. SR without native guides and without FG resets history each frame, losing temporal detail.
 
-The described implementation in `dlssManager.cpp` uses fallback resources:
-
-- **Motion vectors:** `R16G16_SFLOAT`, cleared to `(0.0, 0.0)`.
-- **Depth buffer:** `D32_SFLOAT`, cleared to `1.0`.
-
-These values do not contain the actual motion of scene objects or the scene's real depth.
-
-Temporal DLSS reconstruction normally relies on information such as:
-
-1. Subpixel camera jitter.
-2. Accurate motion vectors.
-3. A valid depth buffer.
-4. Temporal history from previous frames.
-5. Appropriate exposure and other integration-specific inputs.
-
-When these inputs are missing or invalid, reconstruction quality can be substantially reduced. Potential results include blur, ghosting, unstable details, and limited improvement over basic spatial upscaling.
-
-A more complete implementation would require obtaining reliable rendering data from the emulated game's pipeline or developing a suitable method to reconstruct equivalent information.
+Camera matrices/jitter and a separate HUD-free color pass remain unavailable. The input color already includes the game's antialiasing. Blur, ghosting and UI artifacts can still occur; NVIDIA's indicator confirms SDK activity, not image quality.
 
 ### Frame Generation
 
@@ -177,7 +166,7 @@ DirectStorage support remains experimental. Faster loading times and improved st
 - Experimental NVIDIA graphics technology integration.
 - Configurable upscaling and frame generation options.
 - Additional image sharpening controls.
-- Experimental Vulkan-based asset streaming.
+- Experimental DirectStorage file I/O with standard-read fallback.
 - Selected game-specific patches.
 - A launcher-oriented approach to graphics configuration.
 - A foundation for further experimentation with emulator graphics reconstruction.

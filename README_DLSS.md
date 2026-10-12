@@ -25,11 +25,45 @@ An experimental fork of the **KytyPS5** PlayStation 5 emulator featuring native 
      - **FHD (1080p Output)**: Ultra Perf (`640x360`), Perf (`960x540`), Balanced (`1114x648`), Quality (`1280x720`)
      - **QHD / 2K (1440p Output)**: Ultra Perf (`854x480`), Perf (`1280x720`), Balanced (`1486x840`), Quality (`1708x960`)
      - **4K (2160p Output)**: Ultra Perf (`1280x720`), Perf (`1920x1080`), Balanced (`2228x1252`), Quality (`2560x1440`)
-   - All render dimensions are strictly aligned to even integers (multiples of 2/4), completely preventing the NVIDIA NGX `0xbad00005` (`NVSDK_NGX_Result_FAIL_InvalidParameter`) error.
+   - Render dimensions are aligned to even integers. Correct dimensions alone do not prevent every NGX invalid-parameter error; buffer formats, tags and feature support must also be valid.
 
 ---
 
 ## Quick Start & Verification
+
+### Current integration limits
+
+The presentation path receives the guest game's final color image. Astro's
+Playroom now supplies real depth and motion through a verified G-buffer producer
+(PS hash `00B2AAA5E8E98F3F`). The captured textures are tied to each prepared
+frame; motion direction and the game's invalid-vector sentinel are converted
+before tagging. Other materials writing the verified resource pair refresh the
+same inputs. Resource IDs include generation checks; guest addresses are not hard-coded.
+Loading/menu frames and unsupported games retain fallback inputs. Camera matrices,
+jitter and a separate HUD-free color pass remain unavailable. An NVIDIA indicator
+confirms SDK activity, not reconstruction quality.
+
+With native guides, SR retains history and resets it when guide availability or
+resolution changes. Without native guides and with frame generation disabled,
+SR resets history each frame to avoid accumulating moving content with zero
+motion vectors. That fallback loses temporal detail and anti-aliasing. With FG,
+history is retained for interpolation. This remains an experimental integration:
+native camera/jitter and the game's existing antialiasing need further validation.
+
+Sharpness is applied by the presentation CAS pass. Zero disables sharpening.
+Frame-generation multipliers are limited to the device's reported capabilities.
+The overlay uses observed presentation statistics rather than the requested multiplier;
+it needs 120 application presents to establish an average. Dynamic MFG on Vulkan
+falls back to a supported fixed multiplier. Actual image quality and frame pacing
+must be verified in a running game.
+
+For identifying the guest resources, `--dlss-diagnostics` now records a bounded
+inventory (512 distinct pass signatures): producer VS/PS hashes, render-target
+slots/formats/dimensions, depth state, and image/buffer descriptor words. These
+are candidates for analysis, not automatic motion-vector detection. Set
+`KYTY_DRAW_RUN=0` for a diagnostic capture to avoid the fast draw replay path,
+and use `--graphics-debug-dump true --shader-log-direction File --shader-log-folder <capture-folder>` to
+save the corresponding shaders. Diagnostics are disabled in normal runs.
 
 ### 1. Configure Launcher
 1. Open **Launcher** -> **Settings** -> **Configuration**.
@@ -44,7 +78,7 @@ An experimental fork of the **KytyPS5** PlayStation 5 emulator featuring native 
 ### 2. Select Internal Render Resolution in Game Patches
 1. Right-click the game (e.g., *Bloodborne / Demon's Souls / ASTRO BOT*) -> **Cheats (experimental)...**.
 2. Select your desired internal resolution preset matching your target scale (e.g., *QHD - DLSS Performance (1280x720)* or *QHD - DLSS Quality (1708x960)*).
-3. The game will render at this lower base resolution, and DLSS will upscale it to crisp 1440p/4K with Tensor Core anti-aliasing.
+3. The game renders at the selected lower resolution and DLSS reconstructs the output. Clarity depends on valid temporal inputs and the game's existing antialiasing.
 
 ### 3. Verify DLSS with the NVIDIA On-Screen Indicator
 To visually verify that DLSS and Streamline are actively processing frames:
@@ -61,11 +95,22 @@ DLSS Frame Generation strictly requires Windows Hardware-Accelerated GPU Schedul
 
 ---
 
+## DirectStorage and crash diagnostics
+
+DirectStorage currently serves the APR file I/O path only; GPU texture
+streaming and GPU decompression are not integrated. Guest destinations are
+copied from a bounded CPU staging buffer so GPU memory tracking remains active.
+See [runtime findings](docs/DIRECTSTORAGE_RUNTIME_FINDINGS.md) for the measured
+results and the separate Astro physics assertion investigation.
+
+Unhandled faults save their original registers and code bytes under
+`_HangTrace/guest-fault-*.txt`. Release run scripts also preserve the console log.
+
 ## System Requirements
 
 - **OS**: Windows 10/11 x64 (Build 19041+) with HAGS enabled
 - **GPU**:
   - **NVIDIA GeForce RTX 20 / 30 / 40 / 50 Series** (Required for DLSS Super Resolution & Reflex)
-  - **NVIDIA GeForce RTX 40 / 50 Series** (Required for DLSS Frame Generation & Multi-Frame Generation)
+  - **NVIDIA GeForce RTX 40 / 50 Series** for Frame Generation; **RTX 50 Series** for Multi-Frame Generation
 - **Driver**: Latest NVIDIA Game Ready / Studio Drivers.
 - **Dependencies**: Included in release (`sl.*.dll`, `nvngx_*.dll`, `Qt6` runtime).

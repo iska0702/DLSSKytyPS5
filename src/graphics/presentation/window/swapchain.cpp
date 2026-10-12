@@ -8,6 +8,8 @@
 #include "gpu_blit_shaders/gpu_video_out_downscale_spv.h"
 #include "gpu_blit_shaders/gpu_video_out_overlay_spv.h"
 #include "gpu_blit_shaders/gpu_video_out_cas_spv.h"
+#include "gpu_blit_shaders/gpu_dlss_astro_motion_spv.h"
+#include "gpu_blit_shaders/gpu_dlss_depth_spv.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -34,6 +36,10 @@ namespace Libs::Graphics {
 
 struct Presenter::Frame {
 	VulkanImage   image;
+	DLSSFrameGuides guides;
+	std::array<vk::ImageView, 2> guide_source_views {};
+	PresentFilter motion_filter {PresentFilter::Mode::AstroMotion};
+	PresentFilter depth_filter {PresentFilter::Mode::Depth};
 	vk::ImageView view         = nullptr;
 	uint64_t      present_tick = 0;
 	bool          busy         = false;
@@ -42,6 +48,8 @@ struct Presenter::Frame {
 	void Transit(vk::CommandBuffer command, vk::ImageLayout layout, vk::AccessFlags2 access);
 	void CopyFrom(CommandBuffer& command, Image& source);
 	void Clear(CommandBuffer& command, const vk::ClearColorValue& color);
+	void CaptureGuides(CommandBuffer& command, RenderContext& renderer);
+	void ReleaseGuides(GraphicContext& graphics);
 };
 
 class FramePool final {
@@ -51,6 +59,9 @@ public:
 	~FramePool() {
 		m_scheduler.Wait(m_scheduler.CurrentTick() - 1);
 		for (auto& frame: m_frames) {
+			frame->ReleaseGuides(m_window.graphic_ctx);
+			frame->motion_filter.Release(m_window.graphic_ctx.device);
+			frame->depth_filter.Release(m_window.graphic_ctx.device);
 			m_window.graphic_ctx.device.destroyImageView(frame->view, nullptr);
 			if (frame->image.image != nullptr) {
 				m_window.graphic_ctx.DeleteImage(frame->image);
@@ -248,6 +259,130 @@ void Presenter::Frame::CopyFrom(CommandBuffer& command_buffer, Image& source) {
 	EXIT_IF(copy.srcSubresource.layerCount != copy.dstSubresource.layerCount);
 	command.copyImage(source.backing.image, vk::ImageLayout::eTransferSrcOptimal, image.image,
 	                  vk::ImageLayout::eTransferDstOptimal, copy);
+}
+
+void Presenter::Frame::ReleaseGuides(GraphicContext& graphics) {
+	for (auto& view: guide_source_views) {
+		graphics.device.destroyImageView(view, nullptr);
+		view = nullptr;
+	}
+	graphics.device.destroyImageView(guides.motion_view, nullptr);
+	graphics.device.destroyImageView(guides.depth_view, nullptr);
+	if (guides.motion.image != nullptr) graphics.DeleteImage(guides.motion);
+	if (guides.depth.image != nullptr) graphics.DeleteImage(guides.depth);
+	guides.depth_view = nullptr;
+	guides.motion_view = nullptr;
+	guides.valid = false;
+}
+
+void Presenter::Frame::CaptureGuides(CommandBuffer& buffer, RenderContext& renderer) {
+	guides.valid = false;
+	const auto candidate = renderer.dlss_scene_guides;
+	renderer.dlss_scene_guides = {};
+	if (Config::DLSSDiagnosticsEnabled() && candidate.motion) {
+		static bool logged = false;
+		if (!logged) {
+			logged = true;
+			Log::WriteToConsoleAndLog(fmt::format("[DLSS] Snapshot candidate: guides {}x{}, color {}x{}\n",
+			    candidate.extent.width, candidate.extent.height, image.extent.width, image.extent.height));
+		}
+	}
+	if (!Config::DLSSEnabled() || !candidate.motion || !candidate.depth ||
+	    candidate.extent.width != image.extent.width || candidate.extent.height != image.extent.height)
+		return;
+	auto& cache = renderer.GetTextureCache();
+	const auto* motion_owner = cache.TryGetImage(candidate.motion);
+	const auto* depth_owner = cache.TryGetImage(candidate.depth);
+	if (motion_owner == nullptr || depth_owner == nullptr || !motion_owner->registered ||
+	    !depth_owner->registered || motion_owner->binding.needs_rebind || depth_owner->binding.needs_rebind)
+		return;
+	auto& motion = cache.GetImage(candidate.motion);
+	auto& depth = cache.GetImage(candidate.depth);
+	if (Config::DLSSDiagnosticsEnabled()) {
+		static bool logged = false;
+		if (!logged) {
+			logged = true;
+			for (const auto* resource: {&motion, &depth}) {
+				Log::WriteToConsoleAndLog(fmt::format("[DLSS] Snapshot source: {} {}x{} layers={} samples={} usage={}\n",
+				    vk::to_string(resource->backing.format), resource->backing.extent.width,
+				    resource->backing.extent.height, resource->backing.layers, resource->backing.samples,
+				    vk::to_string(resource->backing.usage)));
+			}
+		}
+	}
+	for (const auto* resource: {&motion, &depth}) {
+		if (resource->backing.samples != 1 || resource->backing.layers != 1 ||
+		    resource->backing.extent.width != candidate.extent.width ||
+		    resource->backing.extent.height != candidate.extent.height ||
+		    !(resource->backing.usage & vk::ImageUsageFlagBits::eSampled)) return;
+	}
+	auto& graphics = renderer.GetGraphics();
+	if (guides.motion.image != nullptr && (guides.motion.extent.width != candidate.extent.width ||
+	    guides.motion.extent.height != candidate.extent.height)) ReleaseGuides(graphics);
+	std::array<VulkanImage*, 2> targets {&guides.motion, &guides.depth};
+	std::array<vk::ImageView*, 2> target_views {&guides.motion_view, &guides.depth_view};
+	std::array<Image*, 2> sources {&motion, &depth};
+	std::array<PresentFilter*, 2> filters {&motion_filter, &depth_filter};
+	buffer.EndRendering();
+	auto command = buffer.Handle();
+	for (size_t i = 0; i < targets.size(); ++i) {
+		auto& target = *targets[i];
+		if (target.image == nullptr) {
+			vk::ImageCreateInfo create {};
+			create.imageType = vk::ImageType::e2D;
+			create.format = i == 0 ? vk::Format::eR16G16Sfloat : vk::Format::eR32Sfloat;
+			create.extent = {candidate.extent.width, candidate.extent.height, 1};
+			create.mipLevels = 1;
+			create.arrayLayers = 1;
+			create.samples = vk::SampleCountFlagBits::e1;
+			create.tiling = vk::ImageTiling::eOptimal;
+			create.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+			if (!graphics.CreateImage(create, target)) { ReleaseGuides(graphics); return; }
+			vk::ImageViewCreateInfo view {};
+			view.image = target.image;
+			view.viewType = vk::ImageViewType::e2D;
+			view.format = target.format;
+			view.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+			RequireVulkanSuccess(graphics.device.createImageView(&view, nullptr, target_views[i]),
+			                     "create DLSS frame guide view");
+		}
+	}
+	for (size_t i = 0; i < targets.size(); ++i) {
+		auto& target = *targets[i];
+		graphics.device.destroyImageView(guide_source_views[i], nullptr);
+		vk::ImageViewCreateInfo source_view {};
+		source_view.image = sources[i]->backing.image;
+		source_view.viewType = vk::ImageViewType::e2D;
+		source_view.format = sources[i]->backing.format;
+		source_view.subresourceRange = {i == 0 ? vk::ImageAspectFlagBits::eColor : vk::ImageAspectFlagBits::eDepth,
+		                                0, 1, 0, 1};
+		RequireVulkanSuccess(graphics.device.createImageView(&source_view, nullptr, &guide_source_views[i]),
+		                     "create DLSS guest guide view");
+		sources[i]->Transit(vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eShaderRead,
+		                    {}, command);
+		vk::ImageMemoryBarrier barrier {};
+		barrier.srcAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.oldLayout = vk::ImageLayout::eUndefined; // discard after frame-pool fence
+		barrier.newLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = target.image;
+		barrier.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		command.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+		                        vk::PipelineStageFlagBits::eColorAttachmentOutput, {},
+		                        0, nullptr, 0, nullptr, 1, &barrier);
+		filters[i]->Record(graphics.device, command, guide_source_views[i], 0, candidate.extent,
+		                   *target_views[i], target.format, candidate.extent);
+		barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		barrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		command.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
+		                        vk::PipelineStageFlagBits::eAllCommands, {},
+		                        0, nullptr, 0, nullptr, 1, &barrier);
+	}
+	guides.valid = true;
 }
 
 void Presenter::Frame::Clear(CommandBuffer& command_buffer, const vk::ClearColorValue& color) {
@@ -524,9 +659,15 @@ void Swapchain::Create() {
 
 	m_images = EnumerateVulkan<vk::Image>(
 	    "vkGetSwapchainImagesKHR", [&](uint32_t* count, vk::Image* images) {
+		    if (DLSSManager::Instance().HasGetSwapchainImagesProxy()) {
+			    return static_cast<vk::Result>(DLSSManager::Instance().GetSwapchainImages(
+			        static_cast<VkDevice>(graphics.device), static_cast<VkSwapchainKHR>(m_handle),
+			        count, reinterpret_cast<VkImage*>(images)));
+		    }
 		    return graphics.device.getSwapchainImagesKHR(m_handle, count, images);
 	    });
 	EXIT_NOT_IMPLEMENTED(m_images.empty());
+	DLSSManager::Instance().SetSwapchainImageCount(static_cast<uint32_t>(m_images.size()));
 	// Freeze reports depend on it (RTX 50 PCs froze in Mailbox, not in Fifo).
 	LOGF("Swapchain: %ux%u, %zu images, present mode %s\n", m_extent.width, m_extent.height,
 	     m_images.size(), vk::to_string(create_info.presentMode).c_str());
@@ -837,8 +978,8 @@ void PresentFilter::Record(vk::Device device, vk::CommandBuffer command, vk::Ima
 	static_assert(sizeof(Constants) == 20);
 	if (m_layout == nullptr) {
 		vk::SamplerCreateInfo sampler {};
-		sampler.magFilter    = vk::Filter::eLinear;
-		sampler.minFilter    = vk::Filter::eLinear;
+		sampler.magFilter    = m_mode == Mode::Downscale ? vk::Filter::eLinear : vk::Filter::eNearest;
+		sampler.minFilter    = sampler.magFilter;
 		sampler.mipmapMode   = vk::SamplerMipmapMode::eNearest;
 		sampler.addressModeU = vk::SamplerAddressMode::eClampToEdge;
 		sampler.addressModeV = vk::SamplerAddressMode::eClampToEdge;
@@ -869,7 +1010,11 @@ void PresentFilter::Record(vk::Device device, vk::CommandBuffer command, vk::Ima
 		m_pipeline = nullptr;
 	}
 	if (m_pipeline == nullptr) {
-		m_pipeline = CreateFullscreenPipeline(device, m_layout, GPU_VIDEO_OUT_DOWNSCALE_SPV, target_format);
+		const std::span<const uint32_t> shader = m_mode == Mode::AstroMotion
+		    ? std::span<const uint32_t>(GPU_DLSS_ASTRO_MOTION_SPV)
+		    : m_mode == Mode::Depth ? std::span<const uint32_t>(GPU_DLSS_DEPTH_SPV)
+		                           : std::span<const uint32_t>(GPU_VIDEO_OUT_DOWNSCALE_SPV);
+		m_pipeline = CreateFullscreenPipeline(device, m_layout, shader, target_format);
 		m_format   = target_format;
 	}
 
@@ -1178,7 +1323,7 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 		                                                  source_extent, m_extent,
 		                                                  dlss_upscaled_image,
 		                                                  curr_backbuffer_img,
-		                                                  curr_backbuffer_view);
+		                                                  curr_backbuffer_view, &source->guides);
 	}
 
 	static uint32_t s_present_stat_counter = 0;
@@ -1187,12 +1332,12 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 			"[Present] Frame {}: Source {}x{} -> Swapchain {}x{}, DLSS Evaluated: {}, CAS Filter: {}\n",
 			s_present_stat_counter, source_extent.width, source_extent.height,
 			m_extent.width, m_extent.height, dlss_evaluated ? "YES" : "NO",
-			(dlss_evaluated || (Config::GetDLSSSharpness() > 0.001f)) ? "YES" : "NO"));
+			(Config::GetDLSSSharpness() > 0.001f) ? "YES" : "NO"));
 	}
 
 	const float raw_sharpness = Config::GetDLSSSharpness();
-	const float sharpness     = (raw_sharpness > 0.001f) ? raw_sharpness : 0.45f;
-	const bool  use_cas       = dlss_evaluated || (raw_sharpness > 0.001f);
+	const float sharpness     = std::clamp(raw_sharpness, 0.0f, 1.0f);
+	const bool  use_cas       = sharpness > 0.001f;
 	const bool  filtered      = !dlss_evaluated && source != nullptr && !use_cas &&
 	                            PresentBoxDownscaleEnabled() && PresentNeedsFilter(source_extent, m_extent);
 	const bool  renders_to_attachment = (dlss_evaluated && use_cas) || filtered ||
@@ -1314,6 +1459,25 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 		                           renders_to_attachment ? vk::ImageLayout::eColorAttachmentOptimal
 		                                                 : vk::ImageLayout::eTransferDstOptimal,
 		                           &black, 1, &to_transfer.subresourceRange);
+	}
+
+	// DLSS-G consumes HUD-less output at Present using its tagged GENERAL layout.
+	// CAS/blit temporarily reads it in another layout; restore it before submission.
+	if (dlss_evaluated && dlss_upscaled_image != nullptr && DLSSManager::Instance().IsFGActive()) {
+		vk::ImageMemoryBarrier fg_ready {};
+		fg_ready.oldLayout = use_cas ? vk::ImageLayout::eShaderReadOnlyOptimal
+		                             : vk::ImageLayout::eTransferSrcOptimal;
+		fg_ready.newLayout = vk::ImageLayout::eGeneral;
+		fg_ready.srcAccessMask = use_cas ? vk::AccessFlagBits::eShaderRead : vk::AccessFlagBits::eTransferRead;
+		fg_ready.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+		fg_ready.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		fg_ready.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		fg_ready.image = dlss_upscaled_image->image;
+		fg_ready.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		vk_command.pipelineBarrier(use_cas ? vk::PipelineStageFlagBits::eFragmentShader
+		                                   : vk::PipelineStageFlagBits::eTransfer,
+		                           vk::PipelineStageFlagBits::eAllCommands, {},
+		                           0, nullptr, 0, nullptr, 1, &fg_ready);
 	}
 
 	vk::ImageMemoryBarrier to_present {};
@@ -1451,6 +1615,7 @@ Presenter::Frame& Presenter::PrepareFrame(CommandBuffer& buffer, const ImageInfo
 	frame->Configure(m_impl->window.graphic_ctx,
 	                 {image.backing.extent.width, image.backing.extent.height}, frame_format);
 	frame->CopyFrom(buffer, image);
+	frame->CaptureGuides(buffer, m_impl->renderer);
 	return *frame;
 }
 
@@ -1459,6 +1624,7 @@ Presenter::Frame& Presenter::PrepareBlankFrame(uint32_t width, uint32_t height, 
 	KYTY_PROFILER_FUNCTION();
 	auto              format = m_impl->frames.GetFormat();
 	auto*             frame  = m_impl->frames.Acquire({width, height}, format);
+	frame->guides.valid = false;
 	Common::LockGuard render_lock(m_impl->renderer.GetMutex());
 	frame->Configure(m_impl->window.graphic_ctx, {width, height}, format);
 	vk::ClearColorValue clear {};

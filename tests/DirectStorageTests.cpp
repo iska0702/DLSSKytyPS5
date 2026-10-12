@@ -128,6 +128,17 @@ void TestDirectStorageHostMemoryFileStreaming() {
 
 		Check(std::memcmp(reference_data.data(), ds_read_buf.data(), file_size) == 0,
 		      "DirectStorage host loaded data byte-for-byte exact match with reference");
+		std::vector<uint8_t> tail(128, 0xCD);
+		bytes_read = 99;
+		Check(ds.LoadFileToHostMemory(test_filename, file_size - 17, tail.data(), tail.size(), &bytes_read) &&
+		      bytes_read == 17 && std::memcmp(tail.data(), reference_data.data() + file_size - 17, 17) == 0 &&
+		      tail[17] == 0xCD, "Short read respects EOF and destination bounds");
+		bytes_read = 99;
+		Check(ds.LoadFileToHostMemory(test_filename, file_size, tail.data(), tail.size(), &bytes_read) &&
+		      bytes_read == 0, "Read at EOF returns zero bytes");
+		bytes_read = 99;
+		Check(!ds.LoadFileToHostMemory(L"nonexistent_directstorage_file.bin", 0, tail.data(), tail.size(), &bytes_read) &&
+		      bytes_read == 0, "Missing file fails with zero bytes for fallback");
 	} else {
 		std::printf("[INFO] DirectStorage runtime unavailable, skipping hardware direct streaming benchmark.\n");
 	}

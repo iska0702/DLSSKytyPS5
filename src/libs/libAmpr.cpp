@@ -1994,17 +1994,36 @@ static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offse
 	// Try DirectStorage fast-path if enabled and available
 	auto& ds = Graphics::DirectStorageIntegration::DirectStorageManager::Instance();
 	if (ds.IsEnabled() && ds.IsAvailable()) {
-		uint64_t ds_read = 0;
-		if (ds.LoadFileToHostMemory(std::filesystem::path(host_path), file_offset,
-		                            reinterpret_cast<void*>(destination), size, &ds_read)) {
-			*bytes_read = ds_read;
-			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprHostReadBytes, ds_read);
-			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprGuestCopiedBytes, ds_read);
-			if (ds_read < size) {
-				Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprShortReads);
+		// DS worker I/O must not write directly into guest pages: they may be
+		// write-protected by GPU tracking. Copy on the emulator thread, like the
+		// standard path, so its guest-memory fault/tracking protocol runs.
+		std::vector<uint8_t> staging(static_cast<size_t>(std::min(size, APR_HOST_READ_CHUNK_SIZE)));
+		bool ds_ok = true;
+		while (*bytes_read < size) {
+			const auto request = std::min<uint64_t>(staging.size(), size - *bytes_read);
+			uint64_t read = 0;
+			if (file_offset > UINT64_MAX - *bytes_read ||
+			    !ds.LoadFileToHostMemory(std::filesystem::path(host_path), file_offset + *bytes_read,
+			                            staging.data(), request, &read)) {
+				ds_ok = false;
+				break;
 			}
+			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprHostReadBytes, read);
+			if (read != 0) {
+				Profiler::ScopedLoadingOperation guest_copy(Profiler::LoadingOperation::AprGuestCopy);
+				HangWatchdog::Scope copy("ampr-dstorage-guest-copy", destination + *bytes_read, read);
+				std::memcpy(reinterpret_cast<void*>(destination + *bytes_read), staging.data(), read);
+			}
+			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprGuestCopiedBytes, read);
+			*bytes_read += read;
+			if (read < request) break;
+		}
+		if (ds_ok) {
+			if (*bytes_read < size) Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprShortReads);
 			return OK;
 		}
+		// Restart a failed DS read through the standard path, including any prefix.
+		*bytes_read = 0;
 	}
 
 	Common::File file;

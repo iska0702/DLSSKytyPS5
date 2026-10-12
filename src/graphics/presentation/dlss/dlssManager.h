@@ -20,6 +20,14 @@
 
 namespace Libs::Graphics {
 
+struct DLSSFrameGuides {
+	VulkanImage depth;
+	VulkanImage motion;
+	vk::ImageView depth_view = nullptr;
+	vk::ImageView motion_view = nullptr;
+	bool valid = false;
+};
+
 class DLSSManager final {
 public:
 	static DLSSManager& Instance();
@@ -55,7 +63,8 @@ public:
 	                            vk::Extent2D source_extent, vk::Extent2D target_extent,
 	                            VulkanImage*& out_upscaled_image,
 	                            vk::Image backbuffer_image = nullptr,
-	                            vk::ImageView backbuffer_view = nullptr);
+	                            vk::ImageView backbuffer_view = nullptr,
+	                            const DLSSFrameGuides* guides = nullptr);
 
 	/// Frees GPU resources allocated by DLSS.
 	void ReleaseResources(GraphicContext& graphics);
@@ -76,6 +85,7 @@ public:
 	[[nodiscard]] uint32_t GetEffectiveMultiplier() const noexcept;
 
 	void SetSwapchainFormat(vk::Format format) noexcept { m_swapchain_format = format; }
+	void SetSwapchainImageCount(uint32_t count) noexcept { m_swapchain_image_count = count; }
 	[[nodiscard]] vk::Format GetSwapchainFormat() const noexcept { return m_swapchain_format; }
 
 	/// Notifies Reflex / PCL markers around presentation
@@ -88,6 +98,9 @@ public:
 	VkResult AcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
 	                          VkSemaphore semaphore, VkFence fence, uint32_t* imageIndex);
 	[[nodiscard]] bool HasAcquireNextImageProxy() const noexcept;
+	VkResult GetSwapchainImages(VkDevice device, VkSwapchainKHR swapchain,
+	                            uint32_t* count, VkImage* images);
+	[[nodiscard]] bool HasGetSwapchainImagesProxy() const noexcept;
 
 	VkResult CreateSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* createInfo,
 	                         const VkAllocationCallbacks* allocator, VkSwapchainKHR* swapchain);
@@ -126,6 +139,7 @@ private:
 	// Interposer Vulkan function pointers
 	PFN_vkQueuePresentKHR     m_pfn_vkQueuePresentKHR     = nullptr;
 	PFN_vkAcquireNextImageKHR m_pfn_vkAcquireNextImageKHR = nullptr;
+	PFN_vkGetSwapchainImagesKHR m_pfn_vkGetSwapchainImagesKHR = nullptr;
 	PFN_vkCreateSwapchainKHR  m_pfn_vkCreateSwapchainKHR  = nullptr;
 	PFN_vkDestroySwapchainKHR m_pfn_vkDestroySwapchainKHR = nullptr;
 #if defined(_WIN32)
@@ -138,8 +152,9 @@ private:
 	vk::ImageView           m_output_view   = nullptr;
 	vk::Extent2D            m_output_extent {};
 
-	// Fallback Depth buffer (D32_SFLOAT) for console emulation compatibility
+	// Neutral depth fallback (R32_SFLOAT), matching converted native snapshots.
 	VulkanImage             m_fallback_depth_image;
+	bool                    m_had_native_guides = false;
 	vk::ImageView           m_fallback_depth_view = nullptr;
 	vk::Extent2D            m_depth_extent {};
 	bool                    m_depth_initialized = false;
@@ -161,6 +176,9 @@ private:
 	bool                    m_reflex_supported      = false;
 	bool                    m_nis_supported         = false;
 	uint32_t                m_presented_multiplier  = 1;
+	uint32_t                m_present_samples       = 0;
+	uint64_t                m_presented_frames      = 0;
+	uint32_t                m_swapchain_image_count = 0;
 	vk::Format              m_swapchain_format      = vk::Format::eUndefined;
 	void*                   m_last_frame_token      = nullptr;
 

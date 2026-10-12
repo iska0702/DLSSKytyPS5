@@ -24,7 +24,7 @@
             "name": "Select the common GI-unavailable state"
         },
         {
-            "enabled": true,
+            "enabled": false,
             "memory": [
                 {
                     "off": "c5fb1005b8bf4800c5fb5e053859bd00c3",

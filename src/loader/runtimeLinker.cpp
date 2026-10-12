@@ -822,15 +822,36 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 	// Report whatever guest context can be read safely before terminating: which guest thread
 	// faulted, the register file, the faulting code bytes and the top of its stack.
 	{
+		// Keep the original fault context even when the launcher closes its console.
+		FILE* fault_file = nullptr;
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+		CreateDirectoryA("_HangTrace", nullptr);
+		char fault_path[128];
+		std::snprintf(fault_path, sizeof(fault_path), "_HangTrace/guest-fault-%lu-%llu.txt",
+		              GetCurrentProcessId(), static_cast<unsigned long long>(GetTickCount64()));
+		fault_file = std::fopen(fault_path, "w");
+#endif
+		const auto fault_print = [fault_file](const char* format, auto... args) {
+			if constexpr (sizeof...(args) == 0) {
+				std::fputs(format, stdout);
+				if (fault_file != nullptr) std::fputs(format, fault_file);
+			} else {
+				std::printf(format, args...);
+				if (fault_file != nullptr) std::fprintf(fault_file, format, args...);
+			}
+		};
+		fault_print("pc=%016" PRIx64 " native_code=%u access=%u address=%016" PRIx64 "\n",
+		            info->exception_address, info->native_code,
+		            static_cast<unsigned>(info->access_violation_type), info->access_violation_vaddr);
 		char thread_name[64] = "(host thread)";
 		if (auto self = Libs::LibKernel::PthreadSelfOrNull(); self != nullptr) {
 			if (Libs::LibKernel::PthreadGetname(self, thread_name) != 0) {
 				std::snprintf(thread_name, sizeof(thread_name), "(unnamed guest thread)");
 			}
 		}
-		std::printf("--- Guest fault context ---\n");
-		std::printf("thread: %s\n", thread_name);
-		std::printf("rax=%016" PRIx64 " rbx=%016" PRIx64 " rcx=%016" PRIx64 " rdx=%016" PRIx64 "\n"
+		fault_print("--- Guest fault context ---\n");
+		fault_print("thread: %s\n", thread_name);
+		fault_print("rax=%016" PRIx64 " rbx=%016" PRIx64 " rcx=%016" PRIx64 " rdx=%016" PRIx64 "\n"
 		            "rsi=%016" PRIx64 " rdi=%016" PRIx64 " rbp=%016" PRIx64 " rsp=%016" PRIx64 "\n"
 		            "r8 =%016" PRIx64 " r9 =%016" PRIx64 " r10=%016" PRIx64 " r11=%016" PRIx64 "\n"
 		            "r12=%016" PRIx64 " r13=%016" PRIx64 " r14=%016" PRIx64 " r15=%016" PRIx64 "\n",
@@ -839,19 +860,19 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 		            info->r14, info->r15);
 		if (IsReadableRange(info->exception_address - 48, 96)) {
 			const auto* code = reinterpret_cast<const uint8_t*>(info->exception_address - 48);
-			std::printf("code (pc-48 .. pc+48, fault at byte 48):");
+			fault_print("code (pc-48 .. pc+48, fault at byte 48):");
 			for (int i = 0; i < 96; i++) {
-				std::printf("%s%02x", (i % 16 == 0) ? "\n " : " ", code[i]);
+				fault_print("%s%02x", (i % 16 == 0) ? "\n " : " ", code[i]);
 			}
-			std::printf("\n");
+			fault_print("\n");
 		}
 		if (IsReadableRange(info->rsp, 32 * sizeof(uint64_t))) {
 			const auto* stack = reinterpret_cast<const uint64_t*>(info->rsp);
-			std::printf("stack:");
+			fault_print("stack:");
 			for (int i = 0; i < 32; i++) {
-				std::printf("%s %016" PRIx64, (i % 4 == 0) ? "\n " : "", stack[i]);
+				fault_print("%s %016" PRIx64, (i % 4 == 0) ? "\n " : "", stack[i]);
 			}
-			std::printf("\n");
+			fault_print("\n");
 		}
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		// The faulting host call chain, unwound from the fault context (symbolize the addresses
@@ -859,9 +880,17 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 		// continues from the return address at RSP while that is readable.
 		if (info->native_context != nullptr) {
 			CONTEXT context = *static_cast<const CONTEXT*>(info->native_context);
-			std::printf("host call chain:");
+			const M128A xmm[] = {context.Xmm0, context.Xmm1, context.Xmm2, context.Xmm3,
+			                     context.Xmm4, context.Xmm5, context.Xmm6, context.Xmm7,
+			                     context.Xmm8, context.Xmm9, context.Xmm10, context.Xmm11,
+			                     context.Xmm12, context.Xmm13, context.Xmm14, context.Xmm15};
+			for (int i = 0; i < 16; ++i) {
+				fault_print("xmm%d=%016" PRIx64 "%016" PRIx64 "\n", i,
+				            static_cast<uint64_t>(xmm[i].High), static_cast<uint64_t>(xmm[i].Low));
+			}
+			fault_print("host call chain:");
 			for (int frame = 0; frame < 32 && context.Rip != 0; frame++) {
-				std::printf("%s 0x%016" PRIx64, (frame % 4 == 0) ? "\n " : "",
+				fault_print("%s 0x%016" PRIx64, (frame % 4 == 0) ? "\n " : "",
 				            static_cast<uint64_t>(context.Rip));
 				DWORD64     image_base = 0;
 				auto*       function   = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
@@ -882,10 +911,11 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 				RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context,
 				                 &handler_data, &establisher, nullptr);
 			}
-			std::printf("\n");
+			fault_print("\n");
 		}
 #endif
 		std::fflush(stdout);
+		if (fault_file != nullptr) std::fclose(fault_file);
 	}
 	EXIT("Unhandled host exception: type=%u code=%u pc=0x%016" PRIx64
 	     " access=%u address=0x%016" PRIx64 "\n",

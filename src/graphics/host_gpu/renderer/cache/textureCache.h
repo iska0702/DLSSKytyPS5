@@ -152,6 +152,7 @@ public:
 	[[nodiscard]] vk::ImageView FindRenderTarget(ImageId id, const ImageDesc& desc,
 	                                             const vk::Rect2D* written = nullptr);
 	[[nodiscard]] vk::ImageView FindDepthTarget(ImageId id, const ImageDesc& desc);
+	[[nodiscard]] const Image* TryGetImage(ImageId id) const { return m_slot_images.try_get(id); }
 	[[nodiscard]] Image&        GetImage(ImageId id) {
 		auto& image = m_slot_images[id];
 		TouchImage(image);

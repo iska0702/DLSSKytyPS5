@@ -152,6 +152,8 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 			GetProcAddress(hInterposer, "vkQueuePresentKHR"));
 		m_pfn_vkAcquireNextImageKHR = reinterpret_cast<PFN_vkAcquireNextImageKHR>(
 			GetProcAddress(hInterposer, "vkAcquireNextImageKHR"));
+		m_pfn_vkGetSwapchainImagesKHR = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(
+			GetProcAddress(hInterposer, "vkGetSwapchainImagesKHR"));
 		m_pfn_vkCreateSwapchainKHR = reinterpret_cast<PFN_vkCreateSwapchainKHR>(
 			GetProcAddress(hInterposer, "vkCreateSwapchainKHR"));
 		m_pfn_vkDestroySwapchainKHR = reinterpret_cast<PFN_vkDestroySwapchainKHR>(
@@ -261,7 +263,7 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	bool fg_loaded = false;
 	slIsFeatureLoaded(sl::kFeatureDLSS_G, fg_loaded);
 	sl::Result fg_res = slIsFeatureSupported(sl::kFeatureDLSS_G, adapter_info);
-	m_fg_supported = (fg_res == sl::Result::eOk || fg_loaded);
+	m_fg_supported = (fg_res == sl::Result::eOk && fg_loaded);
 	std::printf("[DLSS] Frame Generation (DLSS-G) support: %d, loaded: %d\n",
 	            static_cast<int>(fg_res), fg_loaded ? 1 : 0);
 
@@ -270,7 +272,7 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	bool reflex_loaded = false;
 	slIsFeatureLoaded(sl::kFeatureReflex, reflex_loaded);
 	sl::Result reflex_res = slIsFeatureSupported(sl::kFeatureReflex, adapter_info);
-	m_reflex_supported = (reflex_res == sl::Result::eOk || reflex_loaded);
+	m_reflex_supported = (reflex_res == sl::Result::eOk && reflex_loaded);
 	std::printf("[DLSS] NVIDIA Reflex support: %d, loaded: %d\n",
 	            static_cast<int>(reflex_res), reflex_loaded ? 1 : 0);
 
@@ -348,17 +350,17 @@ bool DLSSManager::Initialize(GraphicContext& graphics, const DLSSSettings& setti
 void DLSSManager::CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D extent) {
 	DestroyFallbackBuffers(graphics);
 
-	// Fallback Depth: D32_SFLOAT, cleared to neutral 1.0f
+	// R32 float also matches the per-frame native depth snapshots.
 	vk::ImageCreateInfo depth_info {};
 	depth_info.sType         = vk::StructureType::eImageCreateInfo;
 	depth_info.imageType     = vk::ImageType::e2D;
 	depth_info.extent        = { extent.width, extent.height, 1 };
 	depth_info.mipLevels     = 1;
 	depth_info.arrayLayers   = 1;
-	depth_info.format        = vk::Format::eD32Sfloat;
+	depth_info.format        = vk::Format::eR32Sfloat;
 	depth_info.tiling        = vk::ImageTiling::eOptimal;
 	depth_info.initialLayout = vk::ImageLayout::eUndefined;
-	depth_info.usage         = vk::ImageUsageFlagBits::eDepthStencilAttachment |
+	depth_info.usage         = vk::ImageUsageFlagBits::eColorAttachment |
 	                           vk::ImageUsageFlagBits::eSampled |
 	                           vk::ImageUsageFlagBits::eTransferDst;
 	depth_info.sharingMode   = vk::SharingMode::eExclusive;
@@ -370,7 +372,7 @@ void DLSSManager::CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D e
 		view_info.image            = m_fallback_depth_image.image;
 		view_info.viewType         = vk::ImageViewType::e2D;
 		view_info.format           = m_fallback_depth_image.format;
-		view_info.subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1 };
+		view_info.subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
 		if (graphics.device.createImageView(&view_info, nullptr, &m_fallback_depth_view) == vk::Result::eSuccess) {
 			m_depth_extent = extent;
 			m_depth_initialized = false;
@@ -455,6 +457,7 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	out_info.usage         = vk::ImageUsageFlagBits::eStorage |
 	                         vk::ImageUsageFlagBits::eColorAttachment |
 	                         vk::ImageUsageFlagBits::eTransferSrc |
+	                         vk::ImageUsageFlagBits::eTransferDst |
 	                         vk::ImageUsageFlagBits::eSampled;
 	out_info.sharingMode   = vk::SharingMode::eExclusive;
 	out_info.samples       = vk::SampleCountFlagBits::e1;
@@ -482,6 +485,11 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	m_output_extent = target_extent;
 
 	CreateFallbackBuffers(graphics, input_extent);
+	if (m_fallback_depth_view == nullptr || m_fallback_mvec_view == nullptr) {
+		m_status = DLSSStatus::Error;
+		m_status_message = "Failed to allocate DLSS depth/motion resources";
+		return false;
+	}
 
 	// Set DLSS Options in Streamline
 	sl::ViewportHandle viewport(m_viewport_id);
@@ -520,10 +528,12 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	sl::Result res = slDLSSSetOptions(viewport, dlss_options);
 	if (res != sl::Result::eOk) {
 		LOGF("[DLSS] slDLSSSetOptions returned %d\n", static_cast<int>(res));
+		return false;
 	}
 
 	// Configure Frame Generation & Multi-Frame Generation (DLSS-G)
-	if (m_fg_supported && m_settings.fg_enabled && m_settings.fg_mode != DLSSGMode::Off) {
+	if (m_fg_supported && m_reflex_supported && m_max_fg_frames > 0 &&
+	    m_settings.fg_enabled && m_settings.fg_mode != DLSSGMode::Off) {
 		sl::DLSSGOptions g_options {};
 		if (m_settings.fg_mode == DLSSGMode::MFG_Dynamic) {
 			if (m_dynamic_mfg_supported) {
@@ -532,7 +542,7 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 			} else {
 				// Dynamic MFG is D3D12-only in current Streamline; in Vulkan backend, use maximum supported multiplier
 				g_options.mode = sl::DLSSGMode::eOn;
-				g_options.numFramesToGenerate = (m_max_fg_frames > 1) ? (std::min)(m_max_fg_frames - 1, 3u) : 1u;
+				g_options.numFramesToGenerate = (std::min)(m_max_fg_frames, 3u);
 				std::printf("[DLSS] Dynamic MFG is D3D12-only; falling back to fixed %ux multiplier for Vulkan\n",
 				            g_options.numFramesToGenerate + 1);
 			}
@@ -547,7 +557,10 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 			}
 		}
 		g_options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
-		g_options.numBackBuffers = 6;
+		if (g_options.mode == sl::DLSSGMode::eOn) {
+			g_options.numFramesToGenerate = (std::min)(g_options.numFramesToGenerate, m_max_fg_frames);
+		}
+		g_options.numBackBuffers = m_swapchain_image_count;
 		g_options.colorWidth = target_extent.width;
 		g_options.colorHeight = target_extent.height;
 		const auto format_to_use = (m_swapchain_format != vk::Format::eUndefined)
@@ -565,7 +578,7 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 		if (g_res != sl::Result::eOk) {
 			LOGF("[DLSS] slDLSSGSetOptions returned %d\n", static_cast<int>(g_res));
 		} else {
-			std::printf("[DLSS] Frame Generation active: mode %s (%u generated frame(s) per real frame)\n",
+			std::printf("[DLSS] Frame Generation configured: mode %s (%u generated frame(s) per real frame); awaiting presentation statistics\n",
 			            DLSSGModeToString(m_settings.fg_mode), g_options.numFramesToGenerate);
 			std::fflush(stdout);
 		}
@@ -575,6 +588,9 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 		slDLSSGSetOptions(viewport, g_options);
 		m_fg_active = false;
 	}
+	m_presented_multiplier = 1;
+	m_present_samples = 0;
+	m_presented_frames = 0;
 
 	// Configure NVIDIA Reflex Low Latency
 	if (m_reflex_supported) {
@@ -629,8 +645,9 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
                            vk::Extent2D source_extent, vk::Extent2D target_extent,
                            VulkanImage*& out_upscaled_image,
                            vk::Image backbuffer_image,
-                           vk::ImageView backbuffer_view) {
+                           vk::ImageView backbuffer_view, const DLSSFrameGuides* guides) {
 	out_upscaled_image = nullptr;
+	m_last_frame_token = nullptr;
 
 	if (!m_settings.enabled || !m_available || !m_streamline_loaded) {
 		return false;
@@ -666,10 +683,14 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	                             target_extent.height != m_prev_target_extent.height);
 	m_prev_input_extent = source_extent;
 	m_prev_target_extent = target_extent;
+	const bool native_guides = guides != nullptr && guides->valid &&
+	    guides->depth_view != nullptr && guides->motion_view != nullptr &&
+	    guides->depth.extent.width == source_extent.width && guides->depth.extent.height == source_extent.height &&
+	    guides->motion.extent.width == source_extent.width && guides->motion.extent.height == source_extent.height;
 
 	// Clear fallback depth buffer on initial run or resolution change
 	if (!m_depth_initialized || extent_changed) {
-		vk::ImageSubresourceRange depth_range { vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1 };
+		vk::ImageSubresourceRange depth_range { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
 		vk::ImageMemoryBarrier to_clear {};
 		to_clear.sType               = vk::StructureType::eImageMemoryBarrier;
 		to_clear.oldLayout           = vk::ImageLayout::eUndefined;
@@ -684,8 +705,9 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		                           vk::PipelineStageFlagBits::eTransfer,
 		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_clear);
 
-		const vk::ClearDepthStencilValue clear_depth { 1.0f, 0 };
-		cmd_buffer.clearDepthStencilImage(m_fallback_depth_image.image,
+		vk::ClearColorValue clear_depth {};
+		clear_depth.float32[0] = 1.0f;
+		cmd_buffer.clearColorImage(m_fallback_depth_image.image,
 		                                  vk::ImageLayout::eTransferDstOptimal,
 		                                  &clear_depth, 1, &depth_range);
 
@@ -760,11 +782,15 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_general);
 	}
 
+	const auto& depth_image = native_guides ? guides->depth : m_fallback_depth_image;
+	const auto& motion_image = native_guides ? guides->motion : m_fallback_mvec_image;
+	const auto depth_view = native_guides ? guides->depth_view : m_fallback_depth_view;
+	const auto motion_view = native_guides ? guides->motion_view : m_fallback_mvec_view;
 	// Build Streamline Native Resources
 	VkDeviceMemory src_mem = GetImageMemory(graphics, source_image.allocation);
 	VkDeviceMemory dst_mem = GetImageMemory(graphics, m_output_image.allocation);
-	VkDeviceMemory depth_mem = GetImageMemory(graphics, m_fallback_depth_image.allocation);
-	VkDeviceMemory mvec_mem = GetImageMemory(graphics, m_fallback_mvec_image.allocation);
+	VkDeviceMemory depth_mem = GetImageMemory(graphics, depth_image.allocation);
+	VkDeviceMemory mvec_mem = GetImageMemory(graphics, motion_image.allocation);
 
 	sl::Resource in_color_res(sl::ResourceType::eTex2d,
 	                          static_cast<void*>(static_cast<VkImage>(source_image.image)),
@@ -791,28 +817,28 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	out_color_res.usage = static_cast<uint32_t>(m_output_image.usage);
 
 	sl::Resource depth_res(sl::ResourceType::eTex2d,
-	                       static_cast<void*>(static_cast<VkImage>(m_fallback_depth_image.image)),
+	                       static_cast<void*>(static_cast<VkImage>(depth_image.image)),
 	                       depth_mem,
-	                       static_cast<void*>(static_cast<VkImageView>(m_fallback_depth_view)),
+	                       static_cast<void*>(static_cast<VkImageView>(depth_view)),
 	                       static_cast<uint32_t>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
 	depth_res.width = source_extent.width;
 	depth_res.height = source_extent.height;
-	depth_res.nativeFormat = static_cast<uint32_t>(m_fallback_depth_image.format);
+	depth_res.nativeFormat = static_cast<uint32_t>(depth_image.format);
 	depth_res.mipLevels = 1;
 	depth_res.arrayLayers = 1;
-	depth_res.usage = static_cast<uint32_t>(m_fallback_depth_image.usage);
+	depth_res.usage = static_cast<uint32_t>(depth_image.usage);
 
 	sl::Resource mvec_res(sl::ResourceType::eTex2d,
-	                      static_cast<void*>(static_cast<VkImage>(m_fallback_mvec_image.image)),
+	                      static_cast<void*>(static_cast<VkImage>(motion_image.image)),
 	                      mvec_mem,
-	                      static_cast<void*>(static_cast<VkImageView>(m_fallback_mvec_view)),
+	                      static_cast<void*>(static_cast<VkImageView>(motion_view)),
 	                      static_cast<uint32_t>(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
 	mvec_res.width = source_extent.width;
 	mvec_res.height = source_extent.height;
-	mvec_res.nativeFormat = static_cast<uint32_t>(m_fallback_mvec_image.format);
+	mvec_res.nativeFormat = static_cast<uint32_t>(motion_image.format);
 	mvec_res.mipLevels = 1;
 	mvec_res.arrayLayers = 1;
-	mvec_res.usage = static_cast<uint32_t>(m_fallback_mvec_image.usage);
+	mvec_res.usage = static_cast<uint32_t>(motion_image.usage);
 
 	// Define explicit input and output view extents so Streamline knows the exact scaling rectangle
 	const sl::Extent in_extent { 0, 0, source_extent.width, source_extent.height };
@@ -856,6 +882,8 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		LOGF("[DLSS] slGetNewFrameToken failed: %d\n", static_cast<int>(res));
 		return false;
 	}
+	// Present must use this frame's token even if SR evaluation fails and the caller blits.
+	m_last_frame_token = frame_token;
 
 	// Reflex sleep and simulation/submit markers (required by Reflex & DLSS-G runtime)
 	if (m_reflex_supported) {
@@ -868,6 +896,9 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	res = slSetTagForFrame(*frame_token, viewport, tags.data(), static_cast<uint32_t>(tags.size()), static_cast<sl::CommandBuffer*>(cmd_buffer));
 	if (res != sl::Result::eOk) {
 		LOGF("[DLSS] slSetTagForFrame failed: %d\n", static_cast<int>(res));
+		if (m_reflex_supported) {
+			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
+		}
 		return false;
 	}
 
@@ -879,7 +910,16 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	constants.cameraUp            = { 0.0f, 1.0f, 0.0f };
 	constants.cameraRight         = { 1.0f, 0.0f, 0.0f };
 	constants.cameraFwd           = { 0.0f, 0.0f, 1.0f };
-	constants.reset               = (m_frame_counter <= 2 || extent_changed) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+	// Loading and unsupported passes have no verified guides. Avoid reprojecting
+	// stale history on the first transition into or out of the native producer.
+	constants.reset = ((!native_guides && !m_fg_active) || native_guides != m_had_native_guides ||
+	                   m_frame_counter <= 2 || extent_changed)
+	                      ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+	if (native_guides != m_had_native_guides || m_frame_counter == 1) {
+		Log::WriteToConsoleAndLog(fmt::format("[DLSS] Guide inputs: {} ({}x{}); camera jitter remains unavailable\n",
+		    native_guides ? "native Astro depth + motion" : "fallback", source_extent.width, source_extent.height));
+	}
+	m_had_native_guides = native_guides;
 	constants.cameraMotionIncluded = sl::Boolean::eTrue;
 	constants.motionVectors3D      = sl::Boolean::eFalse;
 	constants.depthInverted        = sl::Boolean::eFalse;
@@ -905,6 +945,9 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	res = slSetConstants(constants, *frame_token, viewport);
 	if (res != sl::Result::eOk) {
 		LOGF("[DLSS] slSetConstants failed: %d\n", static_cast<int>(res));
+		if (m_reflex_supported) {
+			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
+		}
 		return false;
 	}
 
@@ -912,18 +955,26 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		// Evaluate Super Resolution Feature
 		const sl::BaseStructure* inputs[] = { &viewport };
 		res = slEvaluateFeature(sl::kFeatureDLSS, *frame_token, inputs, 1, static_cast<sl::CommandBuffer*>(cmd_buffer));
+		if (m_reflex_supported) {
+			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
+		}
 		if (res != sl::Result::eOk) {
 			m_status = DLSSStatus::Error;
 			m_status_message = fmt::format("slEvaluateFeature failed: {}", static_cast<int>(res));
 			Log::WriteToConsoleAndLog(fmt::format("[DLSS] {}\n", m_status_message));
+			// The tagged output has not been written. Do not interpolate garbage
+			// while the caller falls back to its ordinary presentation path.
+			if (m_fg_active) {
+				sl::DLSSGOptions off {};
+				off.mode = sl::DLSSGMode::eOff;
+				slDLSSGSetOptions(viewport, off);
+				m_fg_active = false;
+				m_presented_multiplier = 1;
+			}
 			// Reset resource cache so that the next frame reconfigures DLSS cleanly
 			m_applied_mode = DLSSMode::Off;
 			m_output_extent = {};
 			return false;
-		}
-
-		if (m_reflex_supported) {
-			slPCLSetMarker(sl::PCLMarker::eRenderSubmitEnd, *frame_token);
 		}
 
 		// When DLSS Super Resolution is active, DLSS handles upscaling to target_extent.
@@ -987,9 +1038,26 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 			region.dstOffsets[1].x               = static_cast<int>(target_extent.width);
 			region.dstOffsets[1].y               = static_cast<int>(target_extent.height);
 			region.dstOffsets[1].z               = 1;
-			cmd_buffer.blitImage(source_image.image, vk::ImageLayout::eShaderReadOnlyOptimal,
+			vk::ImageMemoryBarrier source_to_transfer {};
+			source_to_transfer.oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			source_to_transfer.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+			source_to_transfer.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+			source_to_transfer.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+			source_to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			source_to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			source_to_transfer.image = source_image.image;
+			source_to_transfer.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+			cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+			                           vk::PipelineStageFlagBits::eTransfer, {},
+			                           0, nullptr, 0, nullptr, 1, &source_to_transfer);
+			cmd_buffer.blitImage(source_image.image, vk::ImageLayout::eTransferSrcOptimal,
 			                     m_output_image.image, vk::ImageLayout::eTransferDstOptimal, 1,
 			                     &region, vk::Filter::eLinear);
+			std::swap(source_to_transfer.oldLayout, source_to_transfer.newLayout);
+			std::swap(source_to_transfer.srcAccessMask, source_to_transfer.dstAccessMask);
+			cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+			                           vk::PipelineStageFlagBits::eAllCommands, {},
+			                           0, nullptr, 0, nullptr, 1, &source_to_transfer);
 
 			vk::ImageMemoryBarrier to_src {};
 			to_src.sType               = vk::StructureType::eImageMemoryBarrier;
@@ -1025,6 +1093,18 @@ void DLSSManager::SetPresentMarker(bool start) {
 }
 
 void DLSSManager::ReleaseResources(GraphicContext& graphics) {
+	if (m_streamline_loaded && m_fg_active) {
+		sl::ViewportHandle viewport(m_viewport_id);
+		sl::DLSSGOptions off {};
+		off.mode = sl::DLSSGMode::eOff;
+		slDLSSGSetOptions(viewport, off);
+	}
+	m_fg_active = false;
+	m_last_frame_token = nullptr;
+	m_presented_multiplier = 1;
+	m_had_native_guides = false;
+	m_present_samples = 0;
+	m_presented_frames = 0;
 	if (m_output_view != nullptr) {
 		graphics.device.destroyImageView(m_output_view, nullptr);
 		m_output_view = nullptr;
@@ -1071,10 +1151,10 @@ uint32_t DLSSManager::GetRequestedMultiplier() const noexcept {
 		return 1;
 	}
 	switch (m_settings.fg_mode) {
-		case DLSSGMode::MFG_4X: return 4;
-		case DLSSGMode::MFG_3X: return 3;
+		case DLSSGMode::MFG_4X: return (std::min)(m_max_fg_frames, 3u) + 1;
+		case DLSSGMode::MFG_3X: return (std::min)(m_max_fg_frames, 2u) + 1;
 		case DLSSGMode::FG_2X: return 2;
-		case DLSSGMode::MFG_Dynamic: return (m_max_fg_frames > 1) ? (std::min)(m_max_fg_frames, 4u) : 2u;
+		case DLSSGMode::MFG_Dynamic: return (std::min)(m_max_fg_frames, 3u) + 1;
 		default: return 1;
 	}
 }
@@ -1083,7 +1163,7 @@ uint32_t DLSSManager::GetEffectiveMultiplier() const noexcept {
 	if (!m_settings.fg_enabled || !m_fg_active) {
 		return 1;
 	}
-	return (m_presented_multiplier > 1) ? m_presented_multiplier : GetRequestedMultiplier();
+	return m_presented_multiplier;
 }
 
 std::string DLSSManager::GetOverlayInfo() const {
@@ -1123,11 +1203,24 @@ VkResult DLSSManager::QueuePresent(VkQueue queue, const VkPresentInfoKHR* presen
 		if (m_fg_active) {
 			sl::ViewportHandle viewport(m_viewport_id);
 			sl::DLSSGState fg_state {};
-			if (slDLSSGGetState(viewport, fg_state, nullptr) == sl::Result::eOk) {
-				if (fg_state.numFramesActuallyPresented > 0) {
-					m_presented_multiplier = fg_state.numFramesActuallyPresented;
+			const auto state_result = slDLSSGGetState(viewport, fg_state, nullptr);
+			if (state_result == sl::Result::eOk) {
+				// This is a count since the previous query, not a per-frame multiplier.
+				// Present is asynchronous; average a window of real submissions.
+				m_presented_frames += fg_state.numFramesActuallyPresented;
+				if (++m_present_samples >= 120) {
+					m_presented_multiplier = std::clamp(
+					    static_cast<uint32_t>((m_presented_frames + m_present_samples / 2) / m_present_samples),
+					    1u, m_max_fg_frames + 1);
+					m_present_samples = 0;
+					m_presented_frames = 0;
 				}
-				static uint32_t s_last_status = 0;
+				if (fg_state.status != sl::DLSSGStatus::eOk) {
+					m_presented_multiplier = 1;
+					m_present_samples = 0;
+					m_presented_frames = 0;
+				}
+				static uint32_t s_last_status = UINT32_MAX;
 				static uint32_t s_last_presented = 0;
 				const uint32_t cur_status = static_cast<uint32_t>(fg_state.status);
 				if (cur_status != s_last_status || fg_state.numFramesActuallyPresented != s_last_presented) {
@@ -1141,8 +1234,15 @@ VkResult DLSSManager::QueuePresent(VkQueue queue, const VkPresentInfoKHR* presen
 					if (cur_status & static_cast<uint32_t>(sl::DLSSGStatus::eFailGetCurrentBackBufferIndexNotCalled)) issues += "GetBackBufferNotCalled ";
 					if (issues.empty()) issues = "OK";
 					Log::WriteToConsoleAndLog(fmt::format(
-					    "[DLSS] DLSS-G Runtime Status: 0x{:X} ({}), presented multiplier: {}x\n",
+					    "[DLSS] DLSS-G Runtime Status: 0x{:X} ({}), frames presented since last query: {}\n",
 					    cur_status, issues, fg_state.numFramesActuallyPresented));
+				}
+			} else if (m_settings.diagnostics) {
+				static sl::Result last_failure = sl::Result::eOk;
+				if (last_failure != state_result) {
+					last_failure = state_result;
+					Log::WriteToConsoleAndLog(fmt::format(
+					    "[DLSS] DLSS-G runtime query failed: {}\n", static_cast<int>(state_result)));
 				}
 			}
 		}
@@ -1153,6 +1253,17 @@ VkResult DLSSManager::QueuePresent(VkQueue queue, const VkPresentInfoKHR* presen
 
 bool DLSSManager::HasQueuePresentProxy() const noexcept {
 	return m_available && (m_pfn_vkQueuePresentKHR != nullptr);
+}
+
+VkResult DLSSManager::GetSwapchainImages(VkDevice device, VkSwapchainKHR swapchain,
+                                        uint32_t* count, VkImage* images) {
+	return m_pfn_vkGetSwapchainImagesKHR != nullptr
+	           ? m_pfn_vkGetSwapchainImagesKHR(device, swapchain, count, images)
+	           : VK_ERROR_INITIALIZATION_FAILED;
+}
+
+bool DLSSManager::HasGetSwapchainImagesProxy() const noexcept {
+	return m_available && m_pfn_vkGetSwapchainImagesKHR != nullptr;
 }
 
 VkResult DLSSManager::AcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
