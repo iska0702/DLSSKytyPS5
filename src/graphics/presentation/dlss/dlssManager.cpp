@@ -517,7 +517,8 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 	dlss_options.mode = ConvertDLSSMode(m_effective_mode);
 	dlss_options.outputWidth = target_extent.width;
 	dlss_options.outputHeight = target_extent.height;
-	dlss_options.sharpness = m_settings.sharpness;
+	// Presentation CAS applies the user setting once, after reconstruction.
+	dlss_options.sharpness = 0.0f;
 	dlss_options.colorBuffersHDR = sl::Boolean::eFalse;
 	dlss_options.qualityPreset = ConvertDLSSPreset(m_settings.preset);
 	dlss_options.performancePreset = ConvertDLSSPreset(m_settings.preset);
@@ -659,6 +660,31 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	if (!sr_requested && !fg_active_requested) {
 		return false;
 	}
+	const bool native_guides = guides != nullptr && guides->valid &&
+	    guides->depth_view != nullptr && guides->motion_view != nullptr &&
+	    guides->depth.extent.width == source_extent.width && guides->depth.extent.height == source_extent.height &&
+	    guides->motion.extent.width == source_extent.width && guides->motion.extent.height == source_extent.height;
+	const bool camera_valid = native_guides && guides->camera.valid;
+	if (!camera_valid) {
+		// Logos, menus and unsupported scenes cannot reconstruct detail temporally
+		// from fabricated depth/motion. Present those frames spatially, including UI.
+		if (m_fg_active) {
+			sl::ViewportHandle viewport(m_viewport_id);
+			sl::DLSSGOptions off {};
+			off.mode = sl::DLSSGMode::eOff;
+			slDLSSGSetOptions(viewport, off);
+			m_fg_active = false;
+			m_presented_multiplier = 1;
+		}
+		m_applied_mode = DLSSMode::Off;
+		m_applied_fg_mode = DLSSGMode::Off;
+		m_had_native_guides = false;
+		m_status = DLSSStatus::Available;
+		const std::string message = "Spatial presentation: temporal inputs unavailable";
+		if (m_status_message != message) Log::WriteToConsoleAndLog("[DLSS] " + message + "\n");
+		m_status_message = message;
+		return false;
+	}
 
 	if (sr_requested && (source_extent.width > target_extent.width || source_extent.height > target_extent.height)) {
 		// DLSS Super Resolution is an upscaler; it cannot downscale.
@@ -672,6 +698,12 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 			return false;
 		}
 	}
+	if (m_settings.mode == DLSSMode::DLAA &&
+	    (source_extent.width != target_extent.width || source_extent.height != target_extent.height)) {
+		m_status = DLSSStatus::Available;
+		m_status_message = "DLAA requires native input resolution";
+		return false;
+	}
 
 	if (!PrepareResources(graphics, source_extent, target_extent)) {
 		return false;
@@ -683,10 +715,6 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	                             target_extent.height != m_prev_target_extent.height);
 	m_prev_input_extent = source_extent;
 	m_prev_target_extent = target_extent;
-	const bool native_guides = guides != nullptr && guides->valid &&
-	    guides->depth_view != nullptr && guides->motion_view != nullptr &&
-	    guides->depth.extent.width == source_extent.width && guides->depth.extent.height == source_extent.height &&
-	    guides->motion.extent.width == source_extent.width && guides->motion.extent.height == source_extent.height;
 
 	// Clear fallback depth buffer on initial run or resolution change
 	if (!m_depth_initialized || extent_changed) {
@@ -912,11 +940,11 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	constants.cameraFwd           = { 0.0f, 0.0f, 1.0f };
 	// Loading and unsupported passes have no verified guides. Avoid reprojecting
 	// stale history on the first transition into or out of the native producer.
-	constants.reset = ((!native_guides && !m_fg_active) || native_guides != m_had_native_guides ||
+	constants.reset = (!camera_valid || guides->camera.reset || native_guides != m_had_native_guides ||
 	                   m_frame_counter <= 2 || extent_changed)
 	                      ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	if (native_guides != m_had_native_guides || m_frame_counter == 1) {
-		Log::WriteToConsoleAndLog(fmt::format("[DLSS] Guide inputs: {} ({}x{}); camera jitter remains unavailable\n",
+		Log::WriteToConsoleAndLog(fmt::format("[DLSS] Guide inputs: {} ({}x{})\n",
 		    native_guides ? "native Astro depth + motion" : "fallback", source_extent.width, source_extent.height));
 	}
 	m_had_native_guides = native_guides;
@@ -941,6 +969,28 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	constants.cameraFar  = 1000.0f;
 	constants.cameraFOV  = 1.0f;
 	constants.cameraAspectRatio = static_cast<float>(target_extent.width) / static_cast<float>(target_extent.height);
+	if (camera_valid) {
+		const auto& camera = guides->camera;
+		constants.jitterOffset = {camera.jitter_pixels[0], camera.jitter_pixels[1]};
+		constants.cameraPos = {camera.position[0], camera.position[1], camera.position[2]};
+		constants.cameraRight = {camera.right[0], camera.right[1], camera.right[2]};
+		constants.cameraUp = {camera.up[0], camera.up[1], camera.up[2]};
+		constants.cameraFwd = {camera.forward[0], camera.forward[1], camera.forward[2]};
+		auto matrix = [](const DLSSMatrix& value) {
+			sl::float4x4 result {};
+			for (int r = 0; r < 4; ++r)
+				result[r] = {value[r * 4], value[r * 4 + 1], value[r * 4 + 2], value[r * 4 + 3]};
+			return result;
+		};
+		constants.cameraViewToClip = matrix(camera.projection);
+		constants.clipToCameraView = matrix(camera.inverse_projection);
+		constants.clipToPrevClip = matrix(camera.clip_to_previous);
+		constants.prevClipToClip = matrix(camera.previous_to_clip);
+		constants.cameraNear = camera.near_plane;
+		constants.cameraFar = camera.far_plane;
+		constants.cameraFOV = camera.fov;
+		constants.cameraAspectRatio = camera.aspect;
+	}
 
 	res = slSetConstants(constants, *frame_token, viewport);
 	if (res != sl::Result::eOk) {

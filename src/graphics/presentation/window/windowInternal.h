@@ -16,6 +16,7 @@ namespace Libs::Graphics {
 
 class Presenter;
 class RenderContext;
+struct DLSSCamera;
 
 struct SurfaceCapabilities {
 	vk::SurfaceCapabilitiesKHR        capabilities {};
@@ -44,7 +45,8 @@ public:
 	// eColorAttachmentOptimal.
 	void Record(vk::Device device, vk::CommandBuffer command, vk::ImageView source_view,
 	            uint32_t level, vk::Extent2D source, vk::ImageView target_view,
-	            vk::Format target_format, vk::Extent2D target);
+	            vk::Format target_format, vk::Extent2D target, const DLSSCamera* camera = nullptr,
+	            vk::ImageView depth_view = nullptr);
 	void Release(vk::Device device);
 
 private:

@@ -25,10 +25,12 @@ KytyPS5 is a PlayStation 5 emulator written in C++. This fork builds upon the ex
 > [!IMPORTANT]
 > This is an independent experimental fork. It is not affiliated with or endorsed by Sony Interactive Entertainment or NVIDIA. No games or proprietary PlayStation system software are distributed with this project.
 
-## v0.3.1 update (2026-10-12)
+## v1.0.0 update (2026-10-13)
 
-- Astro's Playroom (`PPSA01325`, tested with v01.905.000) supplies verified native depth and motion vectors per prepared frame. Camera jitter and a separate HUD-free color pass still need integration; image quality remains experimental.
+- Astro's Playroom (`PPSA01325`, tested with v01.905.000) supplies verified native depth and motion vectors per prepared frame. Camera matrices, raster jitter and motion reprojection are now integrated. A separate HUD-free color pass remains unimplemented; image quality remains experimental.
 - Streamline swapchain image queries and resource layouts are corrected for frame generation. Fixed MFG 4x was observed in runtime; unsupported multipliers are clamped and Vulkan Dynamic mode uses a supported fixed multiplier.
+- Corrected camera history, jitter sign and units, and depth-based motion for static surfaces. Unsupported logo/menu frames bypass DLSS and MFG.
+- Added native QHD rendering with DLAA through `Run_Astro_DLAA_Native.cmd`, with automatic native resolution profiles. This preserves UI render resolution at a higher GPU cost.
 - Zero sharpness now disables the CAS pass. DLSS feature support, history resets and evaluation failures are handled more accurately.
 - DirectStorage APR file reads use bounded CPU staging before copying into protected guest memory, with checked completion and standard-read fallback. Hardware integrity and EOF tests pass; actual game loading completed over 5,000 requests without recorded errors. GPU streaming/decompression are not integrated, and a loading speedup is not established.
 - Astro's experimental gameplay clock override is disabled by default. A reported windy-slope crash was a `!pos.IsNan()` physics assertion; restoring stock timing is a mitigation, not a confirmed fix for its origin.
@@ -128,9 +130,9 @@ Compatibility, image quality, and performance may vary significantly between gam
 
 Astro's Playroom now provides native motion vectors and depth through a verified G-buffer producer. The guide resources follow the prepared frame, include generation checks, and convert the game's motion direction and invalid-vector sentinel before DLSS uses them.
 
-Unsupported games and loading/menu frames use fallback motion (`R16G16_SFLOAT`, zero) and depth (`R32_SFLOAT`, 1.0). These fallback values do not describe scene movement. SR without native guides and without FG resets history each frame, losing temporal detail.
+Frames without verified camera, depth and motion use spatial presentation instead of DLSS. Logo/menu magnification uses clamped Catmull-Rom reconstruction to keep text edges sharper than bilinear magnification. Frame generation pauses on those frames and resumes when native temporal inputs return. Unsupported games currently use this spatial path.
 
-Camera matrices/jitter and a separate HUD-free color pass remain unavailable. The input color already includes the game's antialiasing. Blur, ghosting and UI artifacts can still occur; NVIDIA's indicator confirms SDK activity, not image quality.
+Astro camera matrices and render-pixel jitter are decoded from the verified view buffer. Motion vectors have projection jitter removed before tagging, and camera/projection discontinuities reset history. Several verified material variants can supply the native guides. A separate HUD-free color pass and replacement of the game's antialiasing remain unimplemented: presentation color still includes the game's postprocessing and UI. NVIDIA's indicator confirms SDK activity, not image quality.
 
 ### Frame Generation
 
@@ -211,3 +213,8 @@ This fork is independently developed and is not affiliated with or endorsed by S
 Third-party components remain subject to their respective licenses. See [LICENSE](LICENSE) and the applicable third-party license files for details.
 
 No proprietary games or PlayStation system firmware are distributed with this project.
+
+For Astro text rendered at full QHD resolution, the optional
+`tools/Run_Astro_DLAA_Native.cmd` selects native 2560x1440 rendering with DLAA
+and MFG 4x. It costs more GPU time than the default Quality profile. See
+[DLSS setup](README_DLSS.md) for details and current integration limits.

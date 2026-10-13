@@ -16,6 +16,7 @@
 #include "graphics/host_gpu/renderer/pipeline/descriptorHeap.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
 #include "kernel/eventQueue.h"
+#include "graphics/presentation/dlss/dlssCamera.h"
 
 #include <memory>
 #include <shared_mutex>
@@ -61,9 +62,12 @@ public:
 		ImageId motion;
 		ImageId depth;
 		vk::Extent2D extent {};
+		DLSSCamera camera {};
 	};
 	DLSSSceneGuides dlss_scene_guides {};
 	DLSSSceneGuides dlss_verified_guides {};
+	DLSSCamera dlss_previous_camera {};
+	uint64_t dlss_camera_frame = UINT64_MAX;
 
 	[[nodiscard]] bool HandleFault(PageFaultAccess access, uint64_t fault_vaddr) noexcept;
 	[[nodiscard]] bool InvalidateMemory(uint64_t vaddr, uint64_t size);

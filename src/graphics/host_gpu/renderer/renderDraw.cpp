@@ -2624,8 +2624,87 @@ static void CommitIndexBuffer(const CommandSink& vk_buffer, const PreparedIndexB
 	vk_buffer.bindIndexBuffer(prepared.buffer, prepared.offset, prepared.type);
 }
 
+// Captured Astro material variants use the same view block (current VP at 0,
+// previous VP at 320) and export current UV minus previous UV to MRT4.
+static bool IsVerifiedAstroMotionProducer(uint64_t hash) {
+	return hash == 0x00B2AAA5E8E98F3Full || hash == 0x4077CAA2B4017744ull ||
+	       hash == 0x1F603955EAA7C161ull || hash == 0xAB73801B6EF3E1D5ull;
+}
+
+static void UpdateDLSSCamera(const CommandBuffer& buffer, const DrawRenderState& state) {
+	if (!Config::DLSSEnabled() || !state.ps_active || state.color_count == 0 ||
+	    state.ps_input_info.stage.program == nullptr) return;
+	auto& context = buffer.GetContext();
+	const auto frame = context.GetGpu().GetFrameNum();
+	if (context.dlss_camera_frame == frame) return;
+	vk::Extent2D extent {};
+	const bool certified = IsVerifiedAstroMotionProducer(state.ps_input_info.stage.program->shader_hash);
+	for (uint32_t i = 0; i < state.color_count; ++i) {
+		const auto& color = state.color_info[i];
+		if (color.target_slot == 4 && (certified ||
+		    (context.dlss_verified_guides.motion && color.image_id == context.dlss_verified_guides.motion &&
+		     state.depth_info.image_id == context.dlss_verified_guides.depth))) extent = color.Extent();
+	}
+	if (extent.width == 0 || extent.height == 0) return;
+	const auto* stage = &state.ps_input_info.stage;
+	if (stage->resources == nullptr) return;
+	for (const auto& descriptor: stage->resources->buffers) {
+		if (descriptor.dword_count < 4) continue;
+		ShaderBufferResource resource {};
+		std::copy_n(descriptor.dwords.data(), 4, resource.fields);
+		if (resource.GetSize() != 496) continue;
+		std::array<float, 124> values {};
+		if (!context.IsMapped(resource.Base48(), sizeof(values)) ||
+		    !context.SynchronizeGpuBackingForRead(resource.Base48(), sizeof(values)) ||
+		    !Libs::LibKernel::Memory::TryReadBacking(resource.Base48(), values.data(), sizeof(values))) continue;
+		const auto* previous = context.dlss_camera_frame != UINT64_MAX &&
+		    frame == context.dlss_camera_frame + 1 ? &context.dlss_previous_camera : nullptr;
+		auto camera = DecodeAstroDLSSCamera(values, extent.width, extent.height, previous);
+		if (!camera.valid) continue;
+		context.dlss_previous_camera = camera;
+		context.dlss_camera_frame = frame;
+		if (Config::DLSSDiagnosticsEnabled() && frame % 120 == 0)
+			Log::WriteToConsoleAndLog(fmt::format("[DLSS] Camera frame={} jitter={:.5f},{:.5f} reset={}\n",
+			    frame, camera.jitter_pixels[0], camera.jitter_pixels[1], camera.reset));
+		break;
+	}
+}
+
 // Bound render targets are candidates, not proof of motion-vector/depth semantics.
 // Log their producer and descriptors for game-specific analysis without guessing.
+static void CaptureDLSSCameraConstants(const CommandBuffer& buffer, const DrawRenderState& state) {
+	if (!Config::DLSSDiagnosticsEnabled() || !state.ps_active ||
+	    state.ps_input_info.stage.program == nullptr || state.color_count != 5) return;
+	static uint64_t last_frame = UINT64_MAX;
+	static uint32_t captures = 0;
+	const auto frame = buffer.GetContext().GetGpu().GetFrameNum();
+	if ((last_frame != UINT64_MAX && frame < last_frame + 30) || captures >= 256) return;
+	last_frame = frame;
+	++captures;
+	for (const auto* stage: {&state.vertex_info[0].stage, &state.ps_input_info.stage}) {
+		if (stage->program == nullptr || stage->resources == nullptr) continue;
+		for (size_t i = 0; i < stage->resources->buffers.size(); ++i) {
+			const auto& descriptor = stage->resources->buffers[i];
+			if (descriptor.dword_count < 4) continue;
+			ShaderBufferResource resource {};
+			std::copy_n(descriptor.dwords.data(), 4, resource.fields);
+			if (resource.GetSize() != 496) continue;
+			const auto bytes = (std::min)(resource.GetSize(), uint64_t{1024});
+			const auto address = resource.Base48();
+			if (bytes < 16 || !buffer.GetContext().IsMapped(address, bytes) ||
+			    !buffer.GetContext().SynchronizeGpuBackingForRead(address, bytes)) continue;
+			std::array<float, 256> values {};
+			if (!Libs::LibKernel::Memory::TryReadBacking(address, values.data(), bytes)) continue;
+			for (uint32_t offset = 0; offset + 16 <= bytes; offset += 16) {
+				const auto* v = values.data() + offset / 4;
+				Log::WriteToConsoleAndLog(fmt::format(
+				    "[DLSS][CameraBuffer] frame={} shader={:016X} index={} offset={} values={:.9g},{:.9g},{:.9g},{:.9g}\n",
+				    frame, stage->program->shader_hash, i, offset, v[0], v[1], v[2], v[3]));
+			}
+		}
+	}
+}
+
 static void LogDLSSTargetInventory(const CommandBuffer& buffer, const DrawRenderState& state) {
 	if (!Config::DLSSDiagnosticsEnabled() || !state.ps_active ||
 	    state.ps_input_info.stage.program == nullptr) return;
@@ -2698,6 +2777,7 @@ static void LogDLSSTargetInventory(const CommandBuffer& buffer, const DrawRender
 static void LogDrawStateIfNeeded(const CommandBuffer& buffer, const DrawCallInfo& draw,
 	                             const DrawRenderState& state, uint32_t index_type_and_size,
                                  const void* index_addr) {
+	CaptureDLSSCameraConstants(buffer, state);
 	LogDLSSTargetInventory(buffer, state);
 	if (!graphics_debug_dump_enabled()) {
 		return;
@@ -3211,6 +3291,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 	const bool  plan_verify = plan != nullptr && DrawPrep::BindingsVerifyMode() != 0;
 	const bool  plan_stages = plan != nullptr && vertex_stages.size() == 1;
 	LogDrawPhase(draw.Name(), "PrepareBindings");
+	UpdateDLSSCamera(buffer, state);
 	auto&                            bindings = m_graphics_bindings;
 	std::array<PreparedBindings*, 4> descriptor_stages {};
 	uint32_t                         stage_count = 0;
@@ -3458,7 +3539,7 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 	}
 	CommitStats::Mark(CommitStats::Phase::AcquireTargets);
 	if (Config::DLSSEnabled() && state.ps_active && state.ps_input_info.stage.program != nullptr &&
-	    state.color_count == 5 && state.depth_info.image_id &&
+	    state.color_count != 0 && state.depth_info.image_id &&
 	    state.depth_info.desc.view_info.format == vk::Format::eD32SfloatS8Uint) {
 		// This shader exports current UV minus previous UV into MRT4. Other RG16
 		// targets are not assumed to be motion vectors.
@@ -3467,10 +3548,12 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 			if (color.target_slot == 4 && color.desc.view_info.format == vk::Format::eR16G16Sfloat &&
 			    color.desc.info.samples == 1 &&
 			    color.desc.view_info.base_level == 0 && color.desc.view_info.layer_count == 1 &&
-			    (state.ps_input_info.stage.program->shader_hash == 0x00B2AAA5E8E98F3Full ||
+			    (IsVerifiedAstroMotionProducer(state.ps_input_info.stage.program->shader_hash) ||
 			     (color.image_id == m_context.dlss_verified_guides.motion &&
 			      state.depth_info.image_id == m_context.dlss_verified_guides.depth))) {
 				m_context.dlss_scene_guides = {color.image_id, state.depth_info.image_id, color.Extent()};
+				if (m_context.dlss_camera_frame == m_context.GetGpu().GetFrameNum())
+					m_context.dlss_scene_guides.camera = m_context.dlss_previous_camera;
 				m_context.dlss_verified_guides = m_context.dlss_scene_guides;
 				if (Config::DLSSDiagnosticsEnabled()) {
 					static bool logged = false;

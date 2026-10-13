@@ -128,6 +128,12 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 		std::string user_enabled_mod_name;
 		for (auto& entry: entries) {
 			if (entry.enabled && entry.name.find("render resolution") != std::string::npos) {
+				if (dlss_mode == Libs::Graphics::DLSSMode::DLAA &&
+				    (entry.name.find("Native") == std::string::npos ||
+				     entry.name.find(fmt::format("({}x{})", target_w, target_h)) == std::string::npos)) {
+					entry.enabled = false;
+					continue;
+				}
 				if (!user_has_enabled_resolution_mod) {
 					user_has_enabled_resolution_mod = true;
 					user_enabled_mod_name = entry.name;
@@ -152,9 +158,18 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 				if (entry.name.find("render resolution") == std::string::npos) {
 					continue;
 				}
+				if (dlss_mode == Libs::Graphics::DLSSMode::DLAA && entry.name.find("Native") == std::string::npos)
+					continue;
 				// Parse WxH from mod name
 				uint32_t mod_w = 0, mod_h = 0;
-				const auto x_pos = entry.name.find('x');
+				// "Fixed" itself contains 'x'; find the numeric WxH separator.
+				size_t x_pos = 0;
+				while ((x_pos = entry.name.find('x', x_pos)) != std::string::npos) {
+					if (x_pos > 0 && x_pos + 1 < entry.name.size() &&
+					    std::isdigit(static_cast<unsigned char>(entry.name[x_pos - 1])) &&
+					    std::isdigit(static_cast<unsigned char>(entry.name[x_pos + 1]))) break;
+					++x_pos;
+				}
 				if (x_pos != std::string::npos && x_pos > 0 && x_pos + 1 < entry.name.size()) {
 					size_t start_w = x_pos;
 					while (start_w > 0 && std::isdigit(static_cast<unsigned char>(entry.name[start_w - 1]))) {

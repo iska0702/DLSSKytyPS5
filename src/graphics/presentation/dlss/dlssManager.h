@@ -5,6 +5,7 @@
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 #include "graphics/presentation/dlss/dlssConfig.h"
+#include "graphics/presentation/dlss/dlssCamera.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,6 +22,7 @@
 namespace Libs::Graphics {
 
 struct DLSSFrameGuides {
+	DLSSCamera camera {};
 	VulkanImage depth;
 	VulkanImage motion;
 	vk::ImageView depth_view = nullptr;

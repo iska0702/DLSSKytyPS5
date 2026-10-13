@@ -273,6 +273,7 @@ void Presenter::Frame::ReleaseGuides(GraphicContext& graphics) {
 	guides.depth_view = nullptr;
 	guides.motion_view = nullptr;
 	guides.valid = false;
+	guides.camera = {};
 }
 
 void Presenter::Frame::CaptureGuides(CommandBuffer& buffer, RenderContext& renderer) {
@@ -348,7 +349,6 @@ void Presenter::Frame::CaptureGuides(CommandBuffer& buffer, RenderContext& rende
 		}
 	}
 	for (size_t i = 0; i < targets.size(); ++i) {
-		auto& target = *targets[i];
 		graphics.device.destroyImageView(guide_source_views[i], nullptr);
 		vk::ImageViewCreateInfo source_view {};
 		source_view.image = sources[i]->backing.image;
@@ -360,6 +360,9 @@ void Presenter::Frame::CaptureGuides(CommandBuffer& buffer, RenderContext& rende
 		                     "create DLSS guest guide view");
 		sources[i]->Transit(vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eShaderRead,
 		                    {}, command);
+	}
+	for (size_t i = 0; i < targets.size(); ++i) {
+		auto& target = *targets[i];
 		vk::ImageMemoryBarrier barrier {};
 		barrier.srcAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
 		barrier.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
@@ -373,7 +376,8 @@ void Presenter::Frame::CaptureGuides(CommandBuffer& buffer, RenderContext& rende
 		                        vk::PipelineStageFlagBits::eColorAttachmentOutput, {},
 		                        0, nullptr, 0, nullptr, 1, &barrier);
 		filters[i]->Record(graphics.device, command, guide_source_views[i], 0, candidate.extent,
-		                   *target_views[i], target.format, candidate.extent);
+		                   *target_views[i], target.format, candidate.extent,
+		                   &candidate.camera, guide_source_views[1]);
 		barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 		barrier.oldLayout = vk::ImageLayout::eColorAttachmentOptimal;
@@ -383,6 +387,7 @@ void Presenter::Frame::CaptureGuides(CommandBuffer& buffer, RenderContext& rende
 		                        0, nullptr, 0, nullptr, 1, &barrier);
 	}
 	guides.valid = true;
+	guides.camera = candidate.camera;
 }
 
 void Presenter::Frame::Clear(CommandBuffer& command_buffer, const vk::ClearColorValue& color) {
@@ -969,13 +974,21 @@ bool PresentNeedsFilter(vk::Extent2D source, vk::Extent2D target) noexcept {
 
 void PresentFilter::Record(vk::Device device, vk::CommandBuffer command, vk::ImageView source_view,
                            uint32_t level, vk::Extent2D source, vk::ImageView target_view,
-                           vk::Format target_format, vk::Extent2D target) {
+                           vk::Format target_format, vk::Extent2D target, const DLSSCamera* camera,
+                           vk::ImageView depth_view) {
 	struct Constants {
 		int32_t  size[2];
 		float    scale[2];
 		uint32_t level;
+		uint32_t padding[3];
+		float reprojection[16];
+		uint32_t camera_valid;
+		uint32_t padding2;
+		float jitter_uv[2];
 	};
-	static_assert(sizeof(Constants) == 20);
+	static_assert(sizeof(Constants) == 112);
+	static_assert(offsetof(Constants, scale) == 8 && offsetof(Constants, reprojection) == 32 &&
+	              offsetof(Constants, camera_valid) == 96 && offsetof(Constants, jitter_uv) == 104);
 	if (m_layout == nullptr) {
 		vk::SamplerCreateInfo sampler {};
 		sampler.magFilter    = m_mode == Mode::Downscale ? vk::Filter::eLinear : vk::Filter::eNearest;
@@ -987,12 +1000,13 @@ void PresentFilter::Record(vk::Device device, vk::CommandBuffer command, vk::Ima
 		sampler.maxLod       = VK_LOD_CLAMP_NONE;
 		RequireVulkanSuccess(device.createSampler(&sampler, nullptr, &m_sampler),
 		                     "create video-out downscale sampler");
-		const vk::DescriptorSetLayoutBinding binding {0, vk::DescriptorType::eCombinedImageSampler,
-		                                              1, vk::ShaderStageFlagBits::eFragment};
+		const std::array<vk::DescriptorSetLayoutBinding, 2> bindings {{
+		    {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+		    {1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment}}};
 		vk::DescriptorSetLayoutCreateInfo    descriptors {};
 		descriptors.flags        = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR;
-		descriptors.bindingCount = 1;
-		descriptors.pBindings    = &binding;
+		descriptors.bindingCount = m_mode == Mode::AstroMotion ? 2 : 1;
+		descriptors.pBindings    = bindings.data();
 		RequireVulkanSuccess(device.createDescriptorSetLayout(&descriptors, nullptr, &m_descriptors),
 		                     "create video-out downscale descriptor layout");
 		const vk::PushConstantRange  constants {vk::ShaderStageFlagBits::eFragment, 0,
@@ -1026,11 +1040,23 @@ void PresentFilter::Record(vk::Device device, vk::CommandBuffer command, vk::Ima
 	write.descriptorType  = vk::DescriptorType::eCombinedImageSampler;
 	write.pImageInfo      = &image;
 	command.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, m_layout, 0, 1, &write);
-	const Constants constants {
+	if (m_mode == Mode::AstroMotion) {
+		const vk::DescriptorImageInfo depth {m_sampler, depth_view, vk::ImageLayout::eShaderReadOnlyOptimal};
+		write.dstBinding = 1;
+		write.pImageInfo = &depth;
+		command.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, m_layout, 0, 1, &write);
+	}
+	const std::array<float, 2> jitter_delta = camera != nullptr ? camera->motion_jitter_delta : std::array<float, 2>{};
+	Constants constants {
 	    {static_cast<int32_t>(source.width), static_cast<int32_t>(source.height)},
-	    {static_cast<float>(source.width) / static_cast<float>(target.width),
-	     static_cast<float>(source.height) / static_cast<float>(target.height)},
+	    {m_mode == Mode::AstroMotion ? jitter_delta[0] : static_cast<float>(source.width) / static_cast<float>(target.width),
+	     m_mode == Mode::AstroMotion ? jitter_delta[1] : static_cast<float>(source.height) / static_cast<float>(target.height)},
 	    level};
+	if (camera != nullptr && camera->valid) {
+		std::copy_n(camera->clip_to_previous.data(), 16, constants.reprojection);
+		constants.camera_valid = 1;
+		std::copy_n(camera->jitter_uv.data(), 2, constants.jitter_uv);
+	}
 	command.pushConstants(m_layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(constants),
 	                      &constants);
 	command.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
@@ -1327,19 +1353,21 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	}
 
 	static uint32_t s_present_stat_counter = 0;
+	const bool spatial_fallback = Config::DLSSEnabled() && !dlss_evaluated && source != nullptr &&
+	    source_extent.width <= m_extent.width && source_extent.height <= m_extent.height;
 	if (++s_present_stat_counter % 300 == 1 && source != nullptr) {
 		Log::WriteToConsoleAndLog(fmt::format(
 			"[Present] Frame {}: Source {}x{} -> Swapchain {}x{}, DLSS Evaluated: {}, CAS Filter: {}\n",
 			s_present_stat_counter, source_extent.width, source_extent.height,
 			m_extent.width, m_extent.height, dlss_evaluated ? "YES" : "NO",
-			(Config::GetDLSSSharpness() > 0.001f) ? "YES" : "NO"));
+			(Config::GetDLSSSharpness() > 0.001f && !spatial_fallback) ? "YES" : "NO"));
 	}
 
 	const float raw_sharpness = Config::GetDLSSSharpness();
 	const float sharpness     = std::clamp(raw_sharpness, 0.0f, 1.0f);
-	const bool  use_cas       = sharpness > 0.001f;
+	const bool  use_cas       = sharpness > 0.001f && !spatial_fallback;
 	const bool  filtered      = !dlss_evaluated && source != nullptr && !use_cas &&
-	                            PresentBoxDownscaleEnabled() && PresentNeedsFilter(source_extent, m_extent);
+	                            (spatial_fallback || (PresentBoxDownscaleEnabled() && PresentNeedsFilter(source_extent, m_extent)));
 	const bool  renders_to_attachment = (dlss_evaluated && use_cas) || filtered ||
 	                                    (!dlss_evaluated && source != nullptr && use_cas);
 

@@ -1509,6 +1509,370 @@
                     "on": "48b8ac010000f0000000"
                 }
             ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: HD Native (1280x720)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bbd0020000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc00050000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bcd0020000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be00050000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba00050000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9d0020000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bed0020000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb00050000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b800050000d0020000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: FHD Native (1920x1080)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb38040000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc80070000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb38040000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc80070000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc38040000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be80070000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc38040000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be80070000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba80070000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b938040000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba80070000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b938040000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be38040000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb80070000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be38040000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb80070000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b88007000038040000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: QHD Native (2560x1440)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bba0050000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc000a0000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bba0050000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc000a0000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bca0050000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be000a0000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bca0050000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be000a0000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba000a0000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b9a0050000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba000a0000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b9a0050000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41bea0050000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb000a0000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41bea0050000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb000a0000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8000a0000a0050000"
+                }
+            ]
+        },
+        {
+            "enabled": false,
+            "name": "Fixed render resolution: 4K Native (3840x2160)",
+            "memory": [
+                {
+                    "off": "bb70080000",
+                    "offset": "0x1d59e8d",
+                    "on": "bb70080000"
+                },
+                {
+                    "off": "41bc000f0000",
+                    "offset": "0x1d59e92",
+                    "on": "41bc000f0000"
+                },
+                {
+                    "off": "bb38040000",
+                    "offset": "0x1d59e9f",
+                    "on": "bb70080000"
+                },
+                {
+                    "off": "41bc80070000",
+                    "offset": "0x1d59ea4",
+                    "on": "41bc000f0000"
+                },
+                {
+                    "off": "41bc38040000",
+                    "offset": "0x1c2beb1",
+                    "on": "41bc70080000"
+                },
+                {
+                    "off": "41be80070000",
+                    "offset": "0x1c2beb7",
+                    "on": "41be000f0000"
+                },
+                {
+                    "off": "41bc70080000",
+                    "offset": "0x1c2bec4",
+                    "on": "41bc70080000"
+                },
+                {
+                    "off": "41be000f0000",
+                    "offset": "0x1c2beca",
+                    "on": "41be000f0000"
+                },
+                {
+                    "off": "ba80070000",
+                    "offset": "0x1c2bf80",
+                    "on": "ba000f0000"
+                },
+                {
+                    "off": "b938040000",
+                    "offset": "0x1c2bf89",
+                    "on": "b970080000"
+                },
+                {
+                    "off": "ba000f0000",
+                    "offset": "0x1c2bfe6",
+                    "on": "ba000f0000"
+                },
+                {
+                    "off": "b970080000",
+                    "offset": "0x1c2bff5",
+                    "on": "b970080000"
+                },
+                {
+                    "off": "41be70080000",
+                    "offset": "0x1c2e5f7",
+                    "on": "41be70080000"
+                },
+                {
+                    "off": "bb000f0000",
+                    "offset": "0x1c2e5fd",
+                    "on": "bb000f0000"
+                },
+                {
+                    "off": "41be38040000",
+                    "offset": "0x1c2e604",
+                    "on": "41be70080000"
+                },
+                {
+                    "off": "bb80070000",
+                    "offset": "0x1c2e60a",
+                    "on": "bb000f0000"
+                },
+                {
+                    "off": "48b8000f000070080000",
+                    "offset": "0x183eea5",
+                    "on": "48b8000f000070080000"
+                }
+            ]
         }
     ],
     "name": "ASTRO's PLAYROOM: elapsed-time FPS unlock + NO ray-traced GI + fixed render resolution (experimental / sin probar)",

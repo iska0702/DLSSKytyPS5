@@ -30,6 +30,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <unordered_set>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -287,6 +288,19 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 	const bool large_workgroup =
 	    (input_info.threads_num[0] * input_info.threads_num[1] * input_info.threads_num[2] >= 512);
 	const bool                   has_sampler = !program.info.samplers.empty();
+	if (Config::DLSSDiagnosticsEnabled()) {
+		static std::unordered_set<uint64_t> seen;
+		if (seen.size() < 256 && seen.insert(program.shader_hash).second) {
+			Log::WriteToConsoleAndLog(fmt::format("[DLSS][GuestCompute] frame={} shader={:016X} images={}\n",
+			    m_context.GetGpu().GetFrameNum(), program.shader_hash, resources.images.size()));
+			for (size_t i = 0; i < resources.images.size(); ++i) {
+				const auto r = DecodeNativeDescriptor<ShaderTextureResource>(resources.images[i]);
+				Log::WriteToConsoleAndLog(fmt::format("[DLSS][ComputeImage] index={} address=0x{:X} extent={}x{} format={} written={}\n",
+				    i, r.Base40(), r.Width5() + 1, r.Height5() + 1, static_cast<uint32_t>(r.Format()),
+				    program.info.images[i].written));
+			}
+		}
+	}
 	static std::atomic<uint32_t> dispatch_log_count {0};
 	if ((large_workgroup || has_sampler) &&
 	    dispatch_log_count.fetch_add(1, std::memory_order_relaxed) < 512) {

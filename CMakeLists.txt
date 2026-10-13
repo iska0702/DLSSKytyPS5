@@ -953,6 +953,9 @@ if(LINUX)
 	target_link_libraries(draw_prep_tests Threads::Threads)
 endif()
 
+add_executable(dlss_camera_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/DLSSCameraTests.cpp")
+target_include_directories(dlss_camera_tests PRIVATE "${KYTY_SOURCE_DIR}")
+
 add_executable(ampr_counter_bank_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/AmprCounterBankTests.cpp"
 )
@@ -1077,6 +1080,7 @@ if(BUILD_TESTING)
 	add_test(NAME clear_register_decode COMMAND $<TARGET_FILE:clear_register_decode_tests>)
 	add_test(NAME ampr_counter_bank COMMAND $<TARGET_FILE:ampr_counter_bank_tests>)
 	add_test(NAME draw_prep COMMAND $<TARGET_FILE:draw_prep_tests>)
+	add_test(NAME dlss_camera COMMAND $<TARGET_FILE:dlss_camera_tests>)
 	add_test(NAME eop_timestamp COMMAND $<TARGET_FILE:eop_timestamp_tests>)
 	add_test(NAME host_input_pulse COMMAND $<TARGET_FILE:host_input_pulse_tests>)
 	add_test(NAME repeat_trace COMMAND $<TARGET_FILE:repeat_trace_tests>)
@@ -2147,6 +2151,7 @@ if(BUILD_TESTING)
 		save_data_dialog_tests
 		http_uri_parse_tests
 		directstorage_tests
+		dlss_camera_tests
 	)
 endif()
 

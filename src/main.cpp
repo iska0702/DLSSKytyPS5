@@ -147,7 +147,7 @@ static void PrintUsage() {
 	::printf("  --playgo-hack                       Use the supplied PlayGo stub fallback.\n");
 	::printf("  --dlss                              Enable NVIDIA DLSS Super Resolution.\n");
 	::printf("  --dlss-mode <mode>                  UltraPerformance, Performance, Balanced, Quality, DLAA.\n");
-	::printf("  --dlss-sharpness <0.0-1.0>          DLSS sharpness. Default: 0.0.\n");
+	::printf("  --dlss-sharpness <0.0-1.0>          Presentation CAS sharpness. Default: 0.35.\n");
 	::printf("  --dlss-preset <preset>              Default, PresetJ, PresetK, PresetL, PresetM.\n");
 	::printf("  --dlss-diagnostics                  Enable verbose DLSS & Streamline diagnostics.\n");
 	::printf("  --dlss-fg                           Enable DLSS Frame Generation (2x frame multiplier).\n");

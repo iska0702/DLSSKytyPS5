@@ -34,23 +34,26 @@ An experimental fork of the **KytyPS5** PlayStation 5 emulator featuring native 
 ### Current integration limits
 
 The presentation path receives the guest game's final color image. Astro's
-Playroom now supplies real depth and motion through a verified G-buffer producer
-(PS hash `00B2AAA5E8E98F3F`). The captured textures are tied to each prepared
+Playroom now supplies real depth and motion through verified G-buffer producers
+(including PS hash `00B2AAA5E8E98F3F`). The captured textures are tied to each prepared
 frame; motion direction and the game's invalid-vector sentinel are converted
 before tagging. Other materials writing the verified resource pair refresh the
 same inputs. Resource IDs include generation checks; guest addresses are not hard-coded.
-Loading/menu frames and unsupported games retain fallback inputs. Camera matrices,
-jitter and a separate HUD-free color pass remain unavailable. An NVIDIA indicator
+Loading/menu frames and unsupported games use spatial presentation. Astro camera matrices
+and jitter are decoded from the verified 496-byte view buffer; normalized motion
+has the current/previous projection jitter removed. A separate HUD-free color pass
+remains unimplemented. An NVIDIA indicator
 confirms SDK activity, not reconstruction quality.
 
-With native guides, SR retains history and resets it when guide availability or
-resolution changes. Without native guides and with frame generation disabled,
-SR resets history each frame to avoid accumulating moving content with zero
-motion vectors. That fallback loses temporal detail and anti-aliasing. With FG,
-history is retained for interpolation. This remains an experimental integration:
-native camera/jitter and the game's existing antialiasing need further validation.
+With native guides, SR retains history and resets it when guide availability,
+resolution or validated camera continuity changes. Without native guides or camera,
+DLSS evaluation is bypassed; logo/menu magnification uses clamped Catmull-Rom
+reconstruction. Frame generation pauses and resumes with the native inputs. This remains
+an experimental integration: the color input includes guest postprocessing and UI;
+it does not replace the game's existing antialiasing pass.
 
-Sharpness is applied by the presentation CAS pass. Zero disables sharpening.
+Sharpness is applied once by the presentation CAS pass on DLSS game frames.
+Zero disables sharpening; the logo/menu spatial path does not add CAS halos.
 Frame-generation multipliers are limited to the device's reported capabilities.
 The overlay uses observed presentation statistics rather than the requested multiplier;
 it needs 120 application presents to establish an average. Dynamic MFG on Vulkan
@@ -114,3 +117,12 @@ Unhandled faults save their original registers and code bytes under
   - **NVIDIA GeForce RTX 40 / 50 Series** for Frame Generation; **RTX 50 Series** for Multi-Frame Generation
 - **Driver**: Latest NVIDIA Game Ready / Studio Drivers.
 - **Dependencies**: Included in release (`sl.*.dll`, `nvngx_*.dll`, `Qt6` runtime).
+
+## Native Astro rendering with DLAA
+
+Run `Run_Astro_DLAA_Native.cmd` from the Windows distribution (source:
+`tools/Run_Astro_DLAA_Native.cmd`). It selects native 2560x1440 guest rendering,
+DLAA and MFG 4x. This avoids the 1708x960 Quality profile reducing UI resolution,
+but uses more GPU time. Native profiles are selected automatically for DLAA;
+unsupported startup frames use spatial presentation. The regular
+`Run_Astro_DLSS_MFG.cmd` keeps the faster Quality profile.

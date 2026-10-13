@@ -694,7 +694,7 @@ private:
 
 void DumpShaderSpirv(const char* stage_name, uint64_t shader_hash,
                      const std::vector<uint32_t>& spirv) {
-	if (!Config::GraphicsDebugDumpEnabled()) {
+	if (!Config::GraphicsDebugDumpEnabled() && Config::GetShaderLogDirection() != Config::LogDirection::File) {
 		return;
 	}
 	static std::atomic_int id = 0;
@@ -712,7 +712,7 @@ void DumpShaderSpirv(const char* stage_name, uint64_t shader_hash,
 
 void DumpShaderOriginal(const char* stage_name, uint64_t shader_hash,
                         std::span<const uint32_t> code, const std::string& decoded_dump) {
-	if (!Config::GraphicsDebugDumpEnabled()) {
+	if (!Config::GraphicsDebugDumpEnabled() && Config::GetShaderLogDirection() != Config::LogDirection::File) {
 		return;
 	}
 	EXIT_IF(code.empty());
