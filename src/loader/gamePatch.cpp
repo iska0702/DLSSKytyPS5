@@ -9,6 +9,7 @@
 #include "kernel/memory.h"
 #include "loader/elf.h"
 #include "loader/gamePatchFilter.h"
+#include "loader/gamePatchIdentity.h"
 #include "loader/runtimeLinker.h"
 #include "loader/systemContent.h"
 
@@ -40,6 +41,7 @@ struct Plan {
 	std::string              title_id;
 	std::string              version;
 	std::string              process;
+	std::string              executable_sha256;
 	std::vector<Write>       writes;
 	std::vector<std::string> mod_names;
 	std::vector<uint64_t>    cave_pages;
@@ -81,6 +83,10 @@ bool LoadPlan(const std::filesystem::path& path, Plan* plan, std::string* error)
 	plan->title_id = root["id"].get<std::string>();
 	plan->version  = root["version"].get<std::string>();
 	plan->process  = root["process"].get<std::string>();
+	plan->executable_sha256 = root.value("executable_sha256", std::string {});
+	if (plan->version == "*" && !IsPatchSHA256(plan->executable_sha256)) {
+		return Fail(error, "version-independent patches require an executable SHA-256");
+	}
 
 	const auto* disable_env = std::getenv(kDisableEnv);
 	const auto  patterns    = ParseDisableList(disable_env != nullptr ? disable_env : "");
@@ -266,8 +272,13 @@ bool ValidateGame(const Plan& plan, const Program* main_program, std::string* er
 	if (!SystemContentParamSfoGetString("TITLE_ID", &title_id) ||
 	    !SystemContentParamSfoGetString("APP_VER", &version) ||
 	    !Common::EqualNoCase(main_program->file_name.filename().string(), plan.process) ||
-	    !Common::EqualNoCase(title_id, plan.title_id) || version != plan.version) {
+	    !Common::EqualNoCase(title_id, plan.title_id) ||
+	    (plan.version != "*" && version != plan.version)) {
 		return Fail(error, "cheat file does not match the loaded game");
+	}
+	if (!plan.executable_sha256.empty() &&
+	    !PatchExecutableMatches(main_program->file_name, plan.executable_sha256)) {
+		return Fail(error, "cheat file executable SHA-256 does not match the loaded game");
 	}
 	return true;
 }

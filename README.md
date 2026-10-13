@@ -218,3 +218,11 @@ For Astro text rendered at full QHD resolution, the optional
 `tools/Run_Astro_DLAA_Native.cmd` selects native 2560x1440 rendering with DLAA
 and MFG 4x. It costs more GPU time than the default Quality profile. See
 [DLSS setup](README_DLSS.md) for details and current integration limits.
+
+## Astro Bot executable-specific patch
+
+The new [PPSA23060 patch](docs/ASTRO_BOT_PATCH.md) provides verified resolution
+profiles for the supplied Astro Bot executable. Its APP_VER is unknown, so the
+updated loader requires an exact executable SHA-256 match. Native profiles support
+DLAA selection; optional renderer/GI changes are disabled. Runtime compatibility
+and Astro Bot DLSS guides have not been verified.

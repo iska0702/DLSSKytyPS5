@@ -715,6 +715,9 @@ add_executable(game_patch_filter_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/GamePatchFilterTests.cpp"
 )
 target_include_directories(game_patch_filter_tests PRIVATE ${inc_headers})
+add_executable(game_patch_identity_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/GamePatchIdentityTests.cpp")
+target_include_directories(game_patch_identity_tests PRIVATE "${KYTY_SOURCE_DIR}")
+target_link_libraries(game_patch_identity_tests FFmpeg::ffmpeg)
 add_executable(lru_cache_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/LruCacheTests.cpp"
 )
@@ -1108,6 +1111,7 @@ if(BUILD_TESTING)
 	add_test(NAME live_switch COMMAND $<TARGET_FILE:live_switch_tests>)
 	add_test(NAME lod_stats_report COMMAND $<TARGET_FILE:lod_stats_report_tests>)
 	add_test(NAME game_patch_filter COMMAND $<TARGET_FILE:game_patch_filter_tests>)
+	add_test(NAME game_patch_identity COMMAND $<TARGET_FILE:game_patch_identity_tests>)
 	add_test(NAME lod_stats_codegen
 	         COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --lod-stats-codegen-only)
 	add_test(NAME gi_probe_codegen
@@ -2122,6 +2126,7 @@ if(BUILD_TESTING)
 		lod_stats_report_tests
 		occlusion_pairs_tests
 		game_patch_filter_tests
+		game_patch_identity_tests
 		lru_cache_tests
 		spirv_local_arrays_tests
 		pipeline_fast_first_tests

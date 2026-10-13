@@ -1,0 +1,652 @@
+{
+    "id": "PPSA23060",
+    "version": "*",
+    "process": "eboot.bin",
+    "name": "ASTRO BOT: hash-verified resolution and optional non-RT compatibility profiles (experimental)",
+    "source_sha256": "c15d0f5c6b476cd4653b20b25b8bc954f02bbeca8fe5a4f22f055df894a7b0f8",
+    "executable_sha256": "c15d0f5c6b476cd4653b20b25b8bc954f02bbeca8fe5a4f22f055df894a7b0f8",
+    "mods": [
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "4584f60f84f10800004531f64c8d3d8ec4a90141b430",
+                    "offset": "0x73b3bcf",
+                    "on": "4584f6e9f2080000904531f64c8d3d8ec4a90141b430"
+                }
+            ],
+            "name": "Select the existing non-tiled deferred-lighting renderer"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "0fb682a00700008887e4050000",
+                    "offset": "0x70cd9c3",
+                    "on": "b80000000090908887e4050000"
+                }
+            ],
+            "name": "Disable GI probes and lighting shaders"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9ac01000041b8f0000000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8ac01000041b9f0000000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707ac010000c706f0000000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707ac010000c706f0000000"
+                }
+            ],
+            "name": "Fixed render resolution: HD DLSS Ultra Performance (428x240)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b98002000041b868010000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b88002000041b968010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70780020000c70668010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70780020000c70668010000"
+                }
+            ],
+            "name": "Fixed render resolution: HD DLSS Performance (640x360)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9e802000041b8b0010000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8e802000041b9b0010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707e8020000c706b0010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707e8020000c706b0010000"
+                }
+            ],
+            "name": "Fixed render resolution: HD DLSS Balanced (744x432)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b95603000041b8e0010000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b85603000041b9e0010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70756030000c706e0010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70756030000c706e0010000"
+                }
+            ],
+            "name": "Fixed render resolution: HD DLSS Quality (854x480)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b98002000041b868010000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b88002000041b968010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70780020000c70668010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70780020000c70668010000"
+                }
+            ],
+            "name": "Fixed render resolution: FHD DLSS Ultra Performance (640x360)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9c003000041b81c020000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8c003000041b91c020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707c0030000c7061c020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707c0030000c7061c020000"
+                }
+            ],
+            "name": "Fixed render resolution: FHD DLSS Performance (960x540)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b95a04000041b888020000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b85a04000041b988020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c7075a040000c70688020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c7075a040000c70688020000"
+                }
+            ],
+            "name": "Fixed render resolution: FHD DLSS Balanced (1114x648)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b90005000041b8d0020000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b80005000041b9d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70700050000c706d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70700050000c706d0020000"
+                }
+            ],
+            "name": "Fixed render resolution: FHD DLSS Quality (1280x720)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b95603000041b8e0010000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b85603000041b9e0010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70756030000c706e0010000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70756030000c706e0010000"
+                }
+            ],
+            "name": "Fixed render resolution: QHD DLSS Ultra Performance (854x480)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b90005000041b8d0020000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b80005000041b9d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70700050000c706d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70700050000c706d0020000"
+                }
+            ],
+            "name": "Fixed render resolution: QHD DLSS Performance (1280x720)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9ce05000041b848030000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8ce05000041b948030000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707ce050000c70648030000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707ce050000c70648030000"
+                }
+            ],
+            "name": "Fixed render resolution: QHD DLSS Balanced (1486x840)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9ac06000041b8c0030000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8ac06000041b9c0030000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707ac060000c706c0030000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707ac060000c706c0030000"
+                }
+            ],
+            "name": "Fixed render resolution: QHD DLSS Quality (1708x960)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b90005000041b8d0020000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b80005000041b9d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70700050000c706d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70700050000c706d0020000"
+                }
+            ],
+            "name": "Fixed render resolution: 4K DLSS Ultra Performance (1280x720)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b98007000041b838040000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b88007000041b938040000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70780070000c70638040000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70780070000c70638040000"
+                }
+            ],
+            "name": "Fixed render resolution: 4K DLSS Performance (1920x1080)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9b408000041b8e4040000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8b408000041b9e4040000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707b4080000c706e4040000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707b4080000c706e4040000"
+                }
+            ],
+            "name": "Fixed render resolution: 4K DLSS Balanced (2228x1252)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9000a000041b8a0050000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8000a000041b9a0050000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707000a0000c706a0050000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707000a0000c706a0050000"
+                }
+            ],
+            "name": "Fixed render resolution: 4K DLSS Quality (2560x1440)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9000f000041b870080000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8000f000041b970080000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707000f0000c70670080000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707000f0000c70670080000"
+                }
+            ],
+            "name": "Fixed render resolution: Native 4K (3840x2160)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b90005000041b8d0020000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b80005000041b9d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70700050000c706d0020000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70700050000c706d0020000"
+                }
+            ],
+            "name": "Fixed render resolution: HD Native (1280x720)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b98007000041b838040000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b88007000041b938040000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c70780070000c70638040000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c70780070000c70638040000"
+                }
+            ],
+            "name": "Fixed render resolution: FHD Native (1920x1080)"
+        },
+        {
+            "enabled": false,
+            "memory": [
+                {
+                    "off": "8b83f0230000",
+                    "offset": "0xc62a97",
+                    "on": "b80400000090"
+                },
+                {
+                    "off": "b9000f000041b870080000",
+                    "offset": "0xc61056",
+                    "on": "b9000a000041b8a0050000"
+                },
+                {
+                    "off": "41b8000f000041b970080000",
+                    "offset": "0xc613aa",
+                    "on": "41b8000a000041b9a0050000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405d57",
+                    "on": "c707000a0000c706a0050000"
+                },
+                {
+                    "off": "c707000f0000c70670080000",
+                    "offset": "0x7405df4",
+                    "on": "c707000a0000c706a0050000"
+                }
+            ],
+            "name": "Fixed render resolution: QHD Native (2560x1440)"
+        }
+    ]
+}
