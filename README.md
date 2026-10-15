@@ -1,228 +1,151 @@
-# KytyPS5 (NVIDIA DLSS & Frame Generation Experimental Fork)
+# KytyPS5 (NVIDIA DLSS, AMD FSR & Frame Generation Experimental Fork)
 
 > [!TIP]
-> **Experimental NVIDIA DLSS Integration:** This fork explores NVIDIA DLSS Super Resolution, DLAA, Frame Generation, image sharpening, and additional graphics features through NVIDIA Streamline.
+> **Experimental Graphics Integration:** This fork explores NVIDIA DLSS Super Resolution, DLAA, DLSS Frame Generation, AMD FidelityFX Super Resolution (FSR), FSR Frame Generation, image sharpening, and additional graphics features through experimental renderer and Streamline integration work.
 >
 > **Documentation and Setup:** [README_DLSS.md](README_DLSS.md)
 >
 > **Windows Releases:** [Download from GitHub Releases](https://github.com/iska0702/DLSSKytyPS5/releases)
 
-This project is a fork of [Jetsku/KytyPS5](https://github.com/Jetsku/KytyPS5), with experimental graphics enhancements and additional launcher configuration options.
+This project is an independent fork of [Jetsku/KytyPS5](https://github.com/Jetsku/KytyPS5). It explores advanced graphics reconstruction, temporal upscaling, frame generation, DirectStorage file I/O, and game-specific compatibility patches.
 
-The fork explores DLSS integration, frame generation, DirectStorage file I/O, game-specific compatibility patches, and image sharpening. These features are experimental and may not work as intended in every game.
+All additional graphics features are experimental. Availability, compatibility, image quality, and performance depend on the game, renderer integration, GPU hardware, drivers, and available rendering data.
 
-- [NVIDIA DLSS & Frame Generation Guide](README_DLSS.md)
-- [Experimental Features and Known Limitations](docs/EXPERIMENTAL.md)
-- [Release Downloads](https://github.com/iska0702/DLSSKytyPS5/releases)
-- [Original Jetsku/KytyPS5 Repository](https://github.com/Jetsku/KytyPS5)
+## v1.0.0 — Graphics Integration Update (2026-10-13)
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#system-requirements)
-[![Status](https://img.shields.io/badge/status-experimental-orange.svg)](#current-status)
-[![License](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
+- **Astro's Playroom:** Tested with game ID `PPSA01325`, version `01.905.000`. Native depth and motion-vector inputs have been verified for prepared gameplay frames. Camera matrices, raster jitter, and motion reprojection are integrated into the experimental DLSS rendering path.
+- **Astro Bot:** Added an executable-specific resolution patch for the supplied executable under game ID `PPSA23060`. The patch uses an exact executable SHA-256 match because the APP_VER is unknown. Native-resolution DLAA profiles are available through the patch configuration, but runtime DLSS compatibility and image quality have not been verified.
+- **DLSS Frame Generation:** Streamline swapchain image queries and resource layouts were corrected. Fixed 4x Multi Frame Generation was observed during runtime testing. Unsupported multipliers are clamped, and Vulkan Dynamic mode uses a supported fixed multiplier.
+- **Native QHD + DLAA:** Added an optional Astro's Playroom launch script for native 2560×1440 rendering with DLAA. This preserves the native render resolution at a higher GPU cost.
+- **AMD FSR:** The project documentation and graphics configuration distinguish AMD FSR upscaling and frame-generation experiments from NVIDIA DLSS. Each feature requires its own compatible implementation and appropriate rendering inputs.
+- **DirectStorage:** APR file reads use bounded CPU staging before copying data into protected guest memory. File integrity and EOF tests passed, and more than 5,000 game-loading requests completed without recorded errors. A loading-speed improvement has not been established.
+- **Diagnostics:** Unhandled guest faults preserve registers, code bytes, and call chains in `_HangTrace/guest-fault-*.txt`.
 
-KytyPS5 is a PlayStation 5 emulator written in C++. This fork builds upon the existing Jetsku/KytyPS5 codebase and investigates additional graphics technologies for Windows x64.
+See [DLSS Runtime Findings](docs/DLSS_RUNTIME_FINDINGS.md), [DirectStorage Runtime Findings](docs/DIRECTSTORAGE_RUNTIME_FINDINGS.md), and [Astro Bot Patch](docs/ASTRO_BOT_PATCH.md).
 
-> [!IMPORTANT]
-> This is an independent experimental fork. It is not affiliated with or endorsed by Sony Interactive Entertainment or NVIDIA. No games or proprietary PlayStation system software are distributed with this project.
-
-## v1.0.0 update (2026-10-13)
-
-- Astro's Playroom (`PPSA01325`, tested with v01.905.000) supplies verified native depth and motion vectors per prepared frame. Camera matrices, raster jitter and motion reprojection are now integrated. A separate HUD-free color pass remains unimplemented; image quality remains experimental.
-- Streamline swapchain image queries and resource layouts are corrected for frame generation. Fixed MFG 4x was observed in runtime; unsupported multipliers are clamped and Vulkan Dynamic mode uses a supported fixed multiplier.
-- Corrected camera history, jitter sign and units, and depth-based motion for static surfaces. Unsupported logo/menu frames bypass DLSS and MFG.
-- Added native QHD rendering with DLAA through `Run_Astro_DLAA_Native.cmd`, with automatic native resolution profiles. This preserves UI render resolution at a higher GPU cost.
-- Zero sharpness now disables the CAS pass. DLSS feature support, history resets and evaluation failures are handled more accurately.
-- DirectStorage APR file reads use bounded CPU staging before copying into protected guest memory, with checked completion and standard-read fallback. Hardware integrity and EOF tests pass; actual game loading completed over 5,000 requests without recorded errors. GPU streaming/decompression are not integrated, and a loading speedup is not established.
-- Astro's experimental gameplay clock override is disabled by default. A reported windy-slope crash was a `!pos.IsNan()` physics assertion; restoring stock timing is a mitigation, not a confirmed fix for its origin.
-- Unhandled guest faults preserve original registers, code bytes and call chains in `_HangTrace/guest-fault-*.txt`.
-
-[DLSS runtime findings](docs/DLSS_RUNTIME_FINDINGS.md) ? [DirectStorage and crash findings](docs/DIRECTSTORAGE_RUNTIME_FINDINGS.md)
-
-## NVIDIA DLSS Integration
-
-The project includes experimental integration work involving the following NVIDIA technologies.
+## Graphics Upscaling and Frame Generation
 
 | Feature | Description | Status |
 |---|---|---|
-| DLSS Super Resolution | AI-assisted image upscaling | Experimental |
-| DLAA | Deep Learning Anti-Aliasing | Experimental |
-| DLSS Frame Generation | Intermediate frame generation | Experimental |
-| Multi-Frame Generation options | 2x, 3x, 4x, and Dynamic launcher options | Experimental |
-| NVIDIA NIS | Image sharpening after upscaling | Experimental |
-| FidelityFX CAS | Adaptive contrast sharpening | Experimental |
-| NVIDIA Streamline | Framework for graphics feature integration | Integrated experimentally |
+| NVIDIA DLSS Super Resolution | AI-assisted image upscaling | Experimental |
+| NVIDIA DLAA | Deep learning anti-aliasing at native resolution | Experimental |
+| NVIDIA DLSS Frame Generation | AI-generated intermediate frames | Experimental |
+| NVIDIA Multi Frame Generation options | 2x, 3x, 4x, and Dynamic launcher options | Experimental |
+| AMD FidelityFX Super Resolution (FSR) | Spatial or temporal upscaling, depending on the FSR implementation | Experimental |
+| AMD FSR Frame Generation | Intermediate frame generation where supported by the integrated implementation | Experimental; runtime support must be verified |
+| NVIDIA Image Scaling (NIS) | Image scaling and sharpening | Experimental |
+| FidelityFX Contrast Adaptive Sharpening (CAS) | Contrast-adaptive image sharpening | Experimental |
+| NVIDIA Streamline | Framework for integrating supported graphics features | Experimentally integrated |
 
-Feature availability and results depend on the implementation, hardware, drivers, and the rendering information available to the emulator.
+**Important:** Listing a feature does not mean that it is fully implemented or operational in every game. FSR upscaling and FSR Frame Generation are separate technologies and must be evaluated independently. FSR Frame Generation must not be confused with AMD Fluid Motion Frames (AFMF), which is a separate driver-level technology.
 
-## NVIDIA DLL Versions
+## Game Testing and Compatibility
 
-The project configuration specifies the following NVIDIA libraries and SDK version.
+### Astro's Playroom
 
-| Component | Version | Purpose |
-|---|---|---|
-| `nvngx_dlss.dll` | 3.10.9.1 | DLSS Super Resolution |
-| `nvngx_dlssg.dll` | 3.10.9.1 | Frame Generation |
-| `nvngx_dlssd.dll` | 3.10.9.1 | Ray Reconstruction |
-| NVIDIA Streamline SDK | 2.14.1 | Integration framework |
+- **Game ID:** `PPSA01325`
+- **Tested version:** `01.905.000`
+- **Native temporal inputs:** Depth and motion vectors were verified for prepared gameplay frames.
+- **DLSS integration:** Camera and projection data, raster jitter, motion-vector processing, and temporal-history handling have been integrated experimentally.
+- **DLAA:** An optional native 2560×1440 rendering profile is provided.
+- **Frame Generation:** Fixed 4x Multi Frame Generation was observed during runtime testing.
+- **Limitations:** A separate HUD-free color pass is not implemented. Presented color still includes the game's postprocessing and UI. Image quality and overall compatibility remain experimental.
 
-The presence of these libraries does not mean every feature is fully operational. Each technology requires compatible integration and appropriate input data.
+Frames without verified temporal inputs use a spatial presentation path instead of DLSS. Logo and menu frames bypass DLSS and frame generation where the required rendering data is unavailable.
 
-**Hardware note:** Official NVIDIA Multi Frame Generation support is associated with compatible GeForce RTX 50-series GPUs. Available features depend on NVIDIA's hardware, driver, and software requirements.
+### Astro Bot
+
+- **Game ID:** `PPSA23060`
+- **Executable-specific patch:** Added in [ASTRO_BOT_PATCH.md](docs/ASTRO_BOT_PATCH.md).
+- **Executable identification:** The loader requires an exact executable SHA-256 match because the APP_VER is unknown.
+- **Resolution profiles:** Native-resolution profiles support DLAA selection in the patch configuration.
+- **Optional renderer/GI modifications:** Disabled.
+- **Runtime verification:** Full DLSS compatibility, frame-generation behavior, image quality, and game stability have not been verified.
+
+The Astro Bot patch must not be interpreted as proof that DLSS or FSR works correctly throughout the game. Compatibility must be verified against the exact executable and runtime configuration.
+
+### FSR and FSR Frame Generation Testing
+
+FSR upscaling and FSR Frame Generation require separate validation. Successful initialization or the appearance of a graphics setting is not sufficient evidence that either feature works correctly.
+
+For each tested game and feature, record:
+
+- The exact game ID, executable hash, and game version.
+- The selected upscaling or frame-generation mode.
+- The internal rendering resolution and output resolution.
+- Whether valid depth, motion vectors, and frame timing are supplied.
+- Whether generated frames are actually presented.
+- Visual artifacts, UI reconstruction issues, crashes, and frame-pacing behavior.
+- GPU model, driver version, and relevant emulator logs.
+
+Do not mark FSR or FSR Frame Generation as fully working for Astro's Playroom or Astro Bot unless that specific feature has been tested and verified in the corresponding build.
 
 ## Additional Graphics Features
 
 ### Image Sharpening
 
-Two additional sharpening approaches are included in the experimental configuration:
+The experimental configuration includes:
 
-- **NVIDIA Image Scaling (NIS):** Optional sharpening following upscaling.
-- **FidelityFX CAS:** Contrast Adaptive Sharpening for additional image detail enhancement.
+- **NVIDIA Image Scaling (NIS):** Optional image scaling and sharpening.
+- **FidelityFX CAS:** Contrast Adaptive Sharpening.
+- **DLSS sharpening controls:** Configurable sharpening behavior where supported by the active rendering path.
 
-Sharpening can improve perceived clarity, but excessive sharpening may introduce halos, noise, and other artifacts.
+Zero sharpness disables the CAS pass in the relevant implementation. Excessive sharpening can introduce halos, noise, and other artifacts.
 
 ### DirectStorage and Vulkan
 
-DirectStorage is connected to the APR host file-read path. Data is read into a bounded CPU staging buffer and then copied into guest memory on the emulator thread. A standard file-read fallback handles unavailable DirectStorage or failed requests.
+DirectStorage is connected to the APR host file-read path. Data is read into a bounded CPU staging buffer and copied into guest memory on the emulator thread. Standard file reads provide a fallback when DirectStorage is unavailable or a request fails.
 
-The shared D3D12/Vulkan texture helper has no renderer callers. GPU texture streaming and GPU decompression are not integrated. The launcher option is named **DirectStorage File I/O (Experimental)**.
+The shared D3D12/Vulkan texture helper currently has no renderer callers. GPU texture streaming and GPU decompression are not integrated. Faster loading times have not been established.
 
-Tests confirm correct file contents and EOF handling. The synchronous implementation has not demonstrated faster loading than ordinary file reads.
-
-### Game-Specific Compatibility Patches
-
-Experimental DLSS-related patches are included for selected game identifiers:
-
-- **ASTRO PLAYROOM:** `PPSA01325`
-- **ASTRO BOT:** `PPSA21567`
-
-Compatibility depends on the specific game version and patch implementation. These patches are not guaranteed to work across all versions or configurations.
-
-### Windows Configuration
-
-The project includes registry scripts related to:
-
-- Hardware-Accelerated GPU Scheduling (HAGS).
-- DLSS status indicator configuration.
-
-Review registry scripts before running them. Changes to Windows graphics settings may require a restart.
-
-## Current Status
-
-**Development status: Experimental.**
-
-The project explores additional graphics features while retaining the underlying KytyPS5 emulator functionality.
-
-Current areas of interest include:
-
-- DLSS Super Resolution integration.
-- DLAA configuration.
-- Frame Generation experiments.
-- Image sharpening.
-- DirectStorage file I/O experiments.
-- Game-specific compatibility testing.
-- Launcher graphics configuration.
-
-Compatibility, image quality, and performance may vary significantly between games and builds.
-
-## Known Limitations
-
-### Temporal rendering inputs
-
-Astro's Playroom now provides native motion vectors and depth through a verified G-buffer producer. The guide resources follow the prepared frame, include generation checks, and convert the game's motion direction and invalid-vector sentinel before DLSS uses them.
-
-Frames without verified camera, depth and motion use spatial presentation instead of DLSS. Logo/menu magnification uses clamped Catmull-Rom reconstruction to keep text edges sharper than bilinear magnification. Frame generation pauses on those frames and resumes when native temporal inputs return. Unsupported games currently use this spatial path.
-
-Astro camera matrices and render-pixel jitter are decoded from the verified view buffer. Motion vectors have projection jitter removed before tagging, and camera/projection discontinuities reset history. Several verified material variants can supply the native guides. A separate HUD-free color pass and replacement of the game's antialiasing remain unimplemented: presentation color still includes the game's postprocessing and UI. NVIDIA's indicator confirms SDK activity, not image quality.
-
-### Frame Generation
-
-Frame Generation may introduce:
-
-- Ghosting and visual artifacts.
-- Incorrectly reconstructed moving objects.
-- UI artifacts.
-- Additional GPU overhead.
-- Increased latency or inconsistent frame pacing.
-
-Increasing the displayed frame rate does not necessarily increase the game's internally rendered frame rate or improve input responsiveness.
-
-### Ray Reconstruction
-
-The presence of `nvngx_dlssd.dll` does not automatically enable Ray Reconstruction.
-
-A compatible ray-tracing pipeline and suitable input data are required. Without these, the library cannot provide the intended functionality.
-
-### DirectStorage
-
-DirectStorage support remains experimental. Faster loading times and improved streaming performance must be demonstrated through testing rather than assumed.
-
-### Game Compatibility
-
-- Not every PS5 game is compatible with KytyPS5.
-- Game-specific patches may depend on particular versions.
-- Graphics features may behave differently between games.
-- Crashes, visual artifacts, and regressions are possible.
-
-## Advantages
-
-- Experimental NVIDIA graphics technology integration.
-- Configurable upscaling and frame generation options.
-- Additional image sharpening controls.
-- Experimental DirectStorage file I/O with standard-read fallback.
-- Selected game-specific patches.
-- A launcher-oriented approach to graphics configuration.
-- A foundation for further experimentation with emulator graphics reconstruction.
-
-## System Requirements
+### Hardware Requirements
 
 - Windows x64.
 - A compatible build of this KytyPS5 fork.
-- Compatible NVIDIA hardware and drivers for the relevant DLSS features.
+- Compatible GPU hardware and drivers for the selected graphics feature.
+- NVIDIA hardware and supported drivers for applicable DLSS features.
+- Hardware and software meeting the requirements of the selected FSR implementation.
 - A legally obtained game copy.
-- Additional requirements may apply to individual NVIDIA technologies.
 
-## Releases
+Official NVIDIA Multi Frame Generation support is associated with compatible GeForce RTX 50-series GPUs. This does not imply that every experimental frame-generation mode in this fork requires or officially supports the same hardware.
 
-Pre-built Windows packages are published on the project's GitHub Releases page.
+## Current Development Status
 
-**[View Releases and Downloads](https://github.com/iska0702/DLSSKytyPS5/releases)**
+This fork is an experimental graphics research project built on the existing KytyPS5 emulator codebase.
 
-Read the release notes before upgrading. Experimental builds may contain regressions, incomplete features, or changes to configuration files.
+Current development areas include:
+
+- NVIDIA DLSS Super Resolution and DLAA.
+- DLSS Frame Generation and Multi Frame Generation experiments.
+- AMD FSR upscaling and FSR Frame Generation experiments.
+- Image sharpening and reconstruction quality.
+- Native resolution profiles and launcher configuration.
+- Experimental DirectStorage file I/O.
+- Game-specific compatibility and rendering patches.
+- Validation of temporal inputs, frame pacing, and generated-frame presentation.
+
+**Experimental status:** A feature being present in the code or launcher does not guarantee that it works in every game. Verified results should be documented separately from planned work and unverified implementations.
 
 ## Reporting Issues
 
 When reporting a problem, include:
 
-- The KytyPS5 fork version or release tag.
-- The affected game and its version.
+- KytyPS5 fork version or release tag.
+- Game ID, version, and executable hash when relevant.
 - GPU model and driver version.
-- Relevant emulator logs.
-- The graphics settings used.
-- Whether the problem occurs with experimental features disabled.
+- Upscaling and frame-generation settings.
+- Internal and output resolutions.
+- Relevant emulator and graphics logs.
+- Whether the issue occurs with experimental features disabled.
 
-Please distinguish between an emulator compatibility issue and an issue specifically caused by the experimental graphics integration.
+Please distinguish emulator compatibility issues from problems caused by the experimental graphics integration.
 
 ## Credits and Licensing
 
 This project is based on [Jetsku/KytyPS5](https://github.com/Jetsku/KytyPS5). Credit for the original emulator, upstream changes, and existing contributions belongs to their respective authors.
 
-NVIDIA DLSS, NVIDIA Streamline, Microsoft DirectStorage, Vulkan, FidelityFX, PlayStation, and the referenced game titles are technologies or trademarks belonging to their respective owners.
+NVIDIA DLSS, NVIDIA Streamline, AMD FidelityFX, Microsoft DirectStorage, Vulkan, PlayStation, and the referenced game titles are technologies or trademarks belonging to their respective owners.
 
-This fork is independently developed and is not affiliated with or endorsed by Sony Interactive Entertainment, NVIDIA, or the referenced game developers.
+This fork is independently developed and is not affiliated with or endorsed by Sony Interactive Entertainment, NVIDIA, AMD, or the referenced game developers. Third-party components remain subject to their respective licenses.
 
-Third-party components remain subject to their respective licenses. See [LICENSE](LICENSE) and the applicable third-party license files for details.
-
-No proprietary games or PlayStation system firmware are distributed with this project.
-
-For Astro text rendered at full QHD resolution, the optional
-`tools/Run_Astro_DLAA_Native.cmd` selects native 2560x1440 rendering with DLAA
-and MFG 4x. It costs more GPU time than the default Quality profile. See
-[DLSS setup](README_DLSS.md) for details and current integration limits.
-
-## Astro Bot executable-specific patch
-
-The new [PPSA23060 patch](docs/ASTRO_BOT_PATCH.md) provides verified resolution
-profiles for the supplied Astro Bot executable. Its APP_VER is unknown, so the
-updated loader requires an exact executable SHA-256 match. Native profiles support
-DLAA selection; optional renderer/GI changes are disabled. Runtime compatibility
-and Astro Bot DLSS guides have not been verified.
+See [LICENSE](LICENSE) and the applicable third-party license files for details. No proprietary games or PlayStation system firmware are distributed with this project.
