@@ -79,7 +79,9 @@ if(KYTY_CLANG_CL)
 	string(REGEX REPLACE "/MD" "/MT" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
 	string(REGEX REPLACE "/MD" "/MT" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
 			
-	set(KYTY_CPP_FLAGS "${KYTY_CPP_FLAGS} /utf-8 /Oy- /wd4244 /wd4305 /wd4800 /wd4345")
+	# The loader, watchdog and optional GPU tests catch C++ exceptions. Do not
+	# depend on /EHsc surviving in an existing CMake cache on clean clang-cl builds.
+	set(KYTY_CPP_FLAGS "${KYTY_CPP_FLAGS} /EHsc /utf-8 /Oy- /wd4244 /wd4305 /wd4800 /wd4345")
   
 	if(KYTY_WARNINGS_ARE_ERRORS)
 		#set(KYTY_CPP_FLAGS "${KYTY_CPP_FLAGS} /WX")
