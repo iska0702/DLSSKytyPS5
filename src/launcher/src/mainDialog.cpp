@@ -170,29 +170,51 @@ void MainDialogPrivate::FindInterpreter() {
 	}
 
 	bool found = QFile::exists(m_interpreter);
+    QString failure = tr("Emulator executable not found: %1").arg(m_interpreter);
 	m_ui->widget->SetRuntimeDirectory(QFileInfo(m_interpreter).absolutePath());
 
 	if (found) {
 		m_ui->label_Interpreter->setText(tr("Emulator: ") + m_interpreter);
 
 		QProcess test;
-		test.setProgram(m_interpreter);
-		test.start();
-		test.waitForFinished();
+        test.setProgram(m_interpreter);
+        test.setArguments({"--help"});
+        test.setWorkingDirectory(QFileInfo(m_interpreter).absolutePath());
+        test.start();
+        const bool started = test.waitForStarted(10000);
+        const bool finished = started && test.waitForFinished(10000);
+        QString detail;
+        if (!started) {
+            detail = test.errorString();
+        } else if (!finished) {
+            detail = tr("Startup check timed out.");
+            test.kill();
+            test.waitForFinished();
+        } else if (test.exitStatus() != QProcess::NormalExit || test.exitCode() != 0) {
+            detail = tr("Exit code: 0x%1. Check that the required DLLs are next to the emulator.")
+                .arg(QString::number(static_cast<quint32>(test.exitCode()), 16).toUpper());
+        }
+        if (!detail.isEmpty()) {
+            failure = tr("Emulator found at %1, but it could not start.\n%2")
+                .arg(m_interpreter, detail);
+            found = false;
+        }
 
 		auto output = QString(test.readAllStandardOutput());
 		auto lines  = output.split(QRegularExpression("[\r\n]"), Qt::SkipEmptyParts);
 
-		if (lines.count() >= 2) {
+		if (found && lines.count() >= 2) {
 			m_ui->label_Version->setText(
 			    tr("Version: ") + (lines.at(0).startsWith("exe_name") ? lines.at(1) : lines.at(0)));
-		} else {
-			found = false;
-		}
-	}
+        } else if (found) {
+            found = false;
+            failure = tr("Emulator found at %1, but its startup check returned no version information.")
+                .arg(m_interpreter);
+        }
+    }
 
-	if (!found) {
-		QMessageBox::critical(m_main_dialog, tr("Error"), tr("Can't find emulator"));
+    if (!found) {
+        QMessageBox::critical(m_main_dialog, tr("Error"), failure);
 		QApplication::quit();
 		return;
 	}
@@ -257,7 +279,10 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
 	if (info.tessellation_enabled) {
 		args << "--tessellation";
 	}
-	if (info.dlss_enabled) {
+	if (info.fsr_enabled) {
+        args << (info.fsr_fg_enabled ? "--fsr-fg" : "--fsr");
+        args << "--fsr-sharpness" << QString::number(info.dlss_sharpness, 'f', 2);
+    } else if (info.dlss_enabled) {
 		args << "--dlss";
 		args << "--dlss-mode" << EnumToText(info.dlss_mode);
 		args << "--dlss-sharpness" << QString::number(info.dlss_sharpness, 'f', 2);

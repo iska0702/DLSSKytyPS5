@@ -485,7 +485,7 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 		const auto* value = std::getenv("KYTY_SIDE_QUEUE");
 		return value == nullptr || std::strcmp(value, "0") != 0;
 	}();
-	graphics.side_queue_index = side_queue_requested && family_queue_count >= 2 ? 1u : 0u;
+	graphics.side_queue_index = side_queue_requested && family_queue_count >= (Config::FSRFGEnabled() ? 4u : 2u) ? 1u : 0u;
 	std::printf("Kyty side-copy queue: %s (family %u has %u queues, KYTY_SIDE_QUEUE)\n",
 	       graphics.side_queue_index != 0 ? "queue 1" : "shared with queue 0", queue_family,
 	       family_queue_count);
@@ -684,6 +684,11 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	     graphics.depth_clip_enable_enabled ? "true" : "false (depth clamp only without Z clipping)");
 	graphics.shader_image_int64_atomics_enabled = image_atomic_int64.shaderImageInt64Atomics;
 	features12.shaderSharedInt64Atomics = supported_features12.shaderSharedInt64Atomics;
+    if (Config::DLSSEnabled() || Config::DLSSFGEnabled()) {
+        features12.descriptorIndexing = supported_features12.descriptorIndexing;
+    }
+    // FidelityFX selects FP16 shader permutations from physical-device capabilities.
+    features12.shaderFloat16 = Config::FSREnabled() ? supported_features12.shaderFloat16 : VK_FALSE;
 	vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR workgroup_layout {};
 	workgroup_layout.workgroupMemoryExplicitLayout =
 	    supported_workgroup_layout.workgroupMemoryExplicitLayout;
@@ -1029,6 +1034,7 @@ static vk::Device VulkanCreateDevice(GraphicContext& graphics,
 	                                           : static_cast<void*>(&fragment_barycentric);
 #endif
 	features13.robustImageAccess   = supported_features13.robustImageAccess;
+    if (Config::DLSSEnabled() || Config::DLSSFGEnabled()) features13.maintenance4 = supported_features13.maintenance4;
 	features13.subgroupSizeControl = graphics.subgroup_size_control_enabled ? VK_TRUE : VK_FALSE;
 	features13.pipelineCreationCacheControl =
 	    graphics.pipeline_creation_cache_control_enabled ? VK_TRUE : VK_FALSE;
@@ -1680,6 +1686,21 @@ void WindowContext::CreateVulkan() {
 			device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
 			device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
 		}
+        // FidelityFX 1.1.4 resolves the KHR entry point even on Vulkan 1.3.
+        // Explicitly enable the promoted extension so vkGetDeviceProcAddr returns it.
+        if (Config::FSREnabled()) {
+            for (const char* extension : {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+                                         VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME}) {
+                if (HasExtension(available_extensions, extension)) device_extensions.push_back(extension);
+            }
+        }
+
+        if (Config::DLSSEnabled() || Config::DLSSFGEnabled()) {
+            // Streamline requests the promoted KHR entry-point names as well as core features.
+            for (const char* extension : {VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, VK_KHR_MAINTENANCE_4_EXTENSION_NAME}) {
+                if (HasExtension(available_extensions, extension)) device_extensions.push_back(extension);
+            }
+        }
 		// NVIDIA DLSS / NGX CUDA kernel extensions
 		if (HasExtension(available_extensions, "VK_KHR_external_memory")) {
 			device_extensions.push_back("VK_KHR_external_memory");
@@ -1745,12 +1766,12 @@ void WindowContext::CreateVulkan() {
 
 	// Initialize NVIDIA DLSS if enabled
 	DLSSSettings dlss_settings {};
-	dlss_settings.enabled     = Config::DLSSEnabled();
+	dlss_settings.enabled     = Config::DLSSEnabled() && !Config::FSREnabled();
 	dlss_settings.mode        = static_cast<DLSSMode>(Config::GetDLSSMode());
 	dlss_settings.sharpness   = Config::GetDLSSSharpness();
 	dlss_settings.preset      = static_cast<DLSSPreset>(Config::GetDLSSPreset());
 	dlss_settings.diagnostics = Config::DLSSDiagnosticsEnabled();
-	dlss_settings.fg_enabled  = Config::DLSSFGEnabled();
+	dlss_settings.fg_enabled  = Config::DLSSFGEnabled() && !Config::FSREnabled();
 	dlss_settings.fg_mode     = static_cast<DLSSGMode>(Config::GetDLSSFGMode());
 	dlss_settings.reflex_mode = static_cast<ReflexMode>(Config::GetReflexMode());
 	if (dlss_settings.enabled || dlss_settings.fg_enabled) {

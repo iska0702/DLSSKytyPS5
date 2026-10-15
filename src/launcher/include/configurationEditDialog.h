@@ -46,6 +46,9 @@ private:
 	bool                         m_has_nvidia_mfg         = false;
 	class QCheckBox*             m_directstorage_checkbox = nullptr;
 
+	class QCheckBox* m_fsr_checkbox = nullptr;
+	class QCheckBox* m_fsr_fg_checkbox = nullptr;
+    class QSlider* m_fsr_sharpness = nullptr;
 	void UpdateDLSSUI();
 
 protected:

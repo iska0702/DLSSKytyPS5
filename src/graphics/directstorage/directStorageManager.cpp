@@ -98,6 +98,8 @@ static std::string HrToString(HRESULT hr) {
 bool DirectStorageManager::Initialize(GraphicContext* graphics) {
 	Common::LockGuard lock(m_mutex);
 	if (!IsEnabled()) {
+        // Initialize may be called again after a configuration toggle.
+        Shutdown();
 		m_status_message = "DirectStorage is disabled in configuration";
 		m_available = false;
 		return false;
@@ -235,7 +237,8 @@ bool DirectStorageManager::Initialize(GraphicContext* graphics) {
 
 	ComPtr<IDStorageQueue> raw_gpu_queue;
 	hr = m_dstorage_factory->CreateQueue(&gpu_queue_desc, IID_PPV_ARGS(&raw_gpu_queue));
-	if (FAILED(hr) || FAILED(raw_gpu_queue->QueryInterface(IID_PPV_ARGS(&m_gpu_queue)))) {
+    if (SUCCEEDED(hr)) hr = raw_gpu_queue->QueryInterface(IID_PPV_ARGS(&m_gpu_queue));
+	if (FAILED(hr)) {
 		m_status_message = fmt::format("CreateQueue (GPU) failed: {}", HrToString(hr));
 		LOGF("[DirectStorage] %s\n", m_status_message.c_str());
 		Shutdown();
@@ -252,7 +255,8 @@ bool DirectStorageManager::Initialize(GraphicContext* graphics) {
 
 	ComPtr<IDStorageQueue> raw_mem_queue;
 	hr = m_dstorage_factory->CreateQueue(&mem_queue_desc, IID_PPV_ARGS(&raw_mem_queue));
-	if (FAILED(hr) || FAILED(raw_mem_queue->QueryInterface(IID_PPV_ARGS(&m_memory_queue)))) {
+    if (SUCCEEDED(hr)) hr = raw_mem_queue->QueryInterface(IID_PPV_ARGS(&m_memory_queue));
+	if (FAILED(hr)) {
 		m_status_message = fmt::format("CreateQueue (Memory) failed: {}", HrToString(hr));
 		LOGF("[DirectStorage] %s\n", m_status_message.c_str());
 		Shutdown();
@@ -461,6 +465,11 @@ bool DirectStorageManager::LoadFileToSharedTexture2D(const std::filesystem::path
 
 	const uint64_t file_size = (static_cast<uint64_t>(file_info.nFileSizeHigh) << 32) | file_info.nFileSizeLow;
 
+
+    if (width == 0 || height == 0 || file_size == 0 || file_size > DSTORAGE_STAGING_BUFFER_SIZE_32MB) {
+        ++m_stats.fallback_count;
+        return false; // never truncate the source length or enqueue invalid texture dimensions
+    }
 	// 1. Create D3D12 shared committed texture
 	D3D12_RESOURCE_DESC res_desc {};
 	res_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -553,9 +562,14 @@ bool DirectStorageManager::LoadFileToSharedTexture2D(const std::filesystem::path
 			break;
 		}
 	}
-	if (mem_type_index == UINT32_MAX) {
-		mem_type_index = 0;
-	}
+    if (mem_type_index == UINT32_MAX) {
+        CloseHandle(shared_handle);
+        m_graphics->device.destroyImage(vk_image, nullptr);
+        d3d_res->Release();
+        ++m_stats.error_count;
+        LOGF("[DirectStorage] No compatible device-local memory type for imported texture\n");
+        return false;
+    }
 	alloc_info.memoryTypeIndex = mem_type_index;
 
 	vk::DeviceMemory vk_mem = nullptr;
@@ -572,8 +586,8 @@ bool DirectStorageManager::LoadFileToSharedTexture2D(const std::filesystem::path
 
 	res = m_graphics->device.bindImageMemory(vk_image, vk_mem, 0);
 	if (res != vk::Result::eSuccess) {
-		m_graphics->device.freeMemory(vk_mem, nullptr);
 		m_graphics->device.destroyImage(vk_image, nullptr);
+		m_graphics->device.freeMemory(vk_mem, nullptr);
 		d3d_res->Release();
 		m_stats.error_count++;
 		LOGF("[DirectStorage] vkBindImageMemory failed: %s\n", vk::to_string(res).c_str());
@@ -603,16 +617,25 @@ bool DirectStorageManager::LoadFileToSharedTexture2D(const std::filesystem::path
 	m_gpu_queue->Submit();
 
 	// 6. Synchronize DirectStorage completion before accessing image in Vulkan
-	m_sync_fence->SetEventOnCompletion(m_fence_value, m_fence_event);
-	if (m_sync_fence->GetCompletedValue() < m_fence_value) {
-		WaitForSingleObject(m_fence_event, INFINITE);
-	}
+    hr = m_sync_fence->SetEventOnCompletion(m_fence_value, m_fence_event);
+    const DWORD wait_result = FAILED(hr) ? WAIT_FAILED :
+        (m_sync_fence->GetCompletedValue() < m_fence_value ? WaitForSingleObject(m_fence_event, INFINITE) : WAIT_OBJECT_0);
+    if (FAILED(hr) || wait_result != WAIT_OBJECT_0) {
+        m_gpu_queue->Close(); // drain writes before releasing the imported resource
+        m_available = false;
+        ++m_stats.error_count;
+        m_graphics->device.destroyImage(vk_image, nullptr);
+        m_graphics->device.freeMemory(vk_mem, nullptr);
+        d3d_res->Release();
+        LOGF("[DirectStorage] Texture completion synchronization failed\n");
+        return false;
+    }
 
 	DSTORAGE_ERROR_RECORD error_record {};
 	m_gpu_queue->RetrieveErrorRecord(&error_record);
 	if (FAILED(error_record.FirstFailure.HResult)) {
-		m_graphics->device.freeMemory(vk_mem, nullptr);
 		m_graphics->device.destroyImage(vk_image, nullptr);
+		m_graphics->device.freeMemory(vk_mem, nullptr);
 		d3d_res->Release();
 		m_stats.error_count++;
 		LOGF("[DirectStorage] DirectStorage texture request failed: %s\n",
@@ -634,8 +657,8 @@ bool DirectStorageManager::LoadFileToSharedTexture2D(const std::filesystem::path
 	vk::ImageView vk_view = nullptr;
 	res = m_graphics->device.createImageView(&view_info, nullptr, &vk_view);
 	if (res != vk::Result::eSuccess) {
-		m_graphics->device.freeMemory(vk_mem, nullptr);
 		m_graphics->device.destroyImage(vk_image, nullptr);
+		m_graphics->device.freeMemory(vk_mem, nullptr);
 		d3d_res->Release();
 		m_stats.error_count++;
 		LOGF("[DirectStorage] vkCreateImageView failed: %s\n", vk::to_string(res).c_str());

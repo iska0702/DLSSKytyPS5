@@ -14,6 +14,8 @@
 #include <windows.h>
 #endif
 
+int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD);
+
 namespace {
 
 using Libs::Graphics::DirectStorageIntegration::DirectStorageManager;
@@ -62,6 +64,10 @@ void TestDirectStorageInitializationAndHardware() {
 	if (ds.IsAvailable()) {
 		Check(ds.IsEnabled(), "Subsystem is enabled");
 		Check(ds.IsAvailable(), "Subsystem is available");
+        Config::SetDirectStorageEnabled(false);
+        Check(!ds.Initialize(nullptr) && !ds.IsAvailable(), "Disabling an initialized subsystem releases availability");
+        Config::SetDirectStorageEnabled(true);
+        Check(ds.Initialize(nullptr) && ds.IsAvailable(), "Re-enabling can initialize again without a stale disabled state");
 	} else {
 		std::printf("[INFO] Running in environment without DirectStorage GPU support or D3D12 device; fallback active.\n");
 	}
@@ -179,6 +185,8 @@ void TestDirectStorageSharedTextureLifecycle() {
 
 int main(int argc, char* argv[]) {
 	Config::Initialize();
+    if (argc > 1 && (std::strcmp(argv[1], "--dlss-vulkan") == 0 || std::strcmp(argv[1], "--dlss-requirements") == 0 || std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0))
+        return RunDLSSVulkanSmoke(std::strcmp(argv[1], "--dlss-requirements") == 0, std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0);
 
 	std::printf("========================================\n");
 	std::printf("  KytyPS5 DirectStorage Subsystem Tests  \n");

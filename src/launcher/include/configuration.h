@@ -223,6 +223,8 @@ public:
 #endif
 	QStringList host_input_mapping;
 
+	bool       fsr_enabled = false;
+	bool       fsr_fg_enabled = false;
 	bool       dlss_enabled     = false;
 	DLSSMode   dlss_mode        = DLSSMode::Quality;
 	float      dlss_sharpness   = 0.35f;
@@ -265,6 +267,8 @@ public:
 		red_zone_protection_enabled = other.red_zone_protection_enabled;
 #endif
 		host_input_mapping = other.host_input_mapping;
+		fsr_enabled = other.fsr_enabled;
+		fsr_fg_enabled = other.fsr_fg_enabled;
 		dlss_enabled       = other.dlss_enabled;
 		dlss_mode          = other.dlss_mode;
 		dlss_sharpness     = other.dlss_sharpness;
@@ -322,6 +326,8 @@ public:
 		KYTY_CFG_SET(red_zone_protection_enabled);
 #endif
 		s->setValue("host_input_mapping", host_input_mapping);
+		KYTY_CFG_SET(fsr_enabled);
+		KYTY_CFG_SET(fsr_fg_enabled);
 		KYTY_CFG_SET(dlss_enabled);
 		KYTY_CFG_SET(dlss_mode);
 		s->setValue("dlss_sharpness", static_cast<double>(dlss_sharpness));
@@ -379,6 +385,8 @@ public:
 		    s->value("red_zone_protection_enabled", red_zone_protection_enabled).toBool();
 #endif
 		host_input_mapping = s->value("host_input_mapping", host_input_mapping).toStringList();
+		fsr_enabled = s->value("fsr_enabled", fsr_enabled).toBool();
+		fsr_fg_enabled = s->value("fsr_fg_enabled", fsr_fg_enabled).toBool();
 		dlss_enabled       = s->value("dlss_enabled", dlss_enabled).toBool();
 		KYTY_CFG_GET(dlss_mode);
 		if (EnumToText(dlss_mode).isEmpty()) {

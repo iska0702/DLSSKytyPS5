@@ -86,6 +86,8 @@ struct ConfigOptions {
 	bool                   tessellation_enabled        = false;
 	bool                   trophy_enabled              = true;
 	bool                   playgo_hack_enabled         = false;
+	bool                   fsr_enabled                 = false;
+	bool                   fsr_fg_enabled              = false;
 	bool                   dlss_enabled                = false;
 	uint32_t               dlss_mode                   = 4;
 	float                  dlss_sharpness              = 0.35f;
@@ -103,6 +105,9 @@ struct ConfigOptions {
 
 void Load(const ConfigOptions& cfg);
 
+bool FSREnabled();
+bool FSRFGEnabled();
+bool TemporalUpscalingEnabled();
 bool DLSSEnabled();
 uint32_t GetDLSSMode();
 float GetDLSSSharpness();

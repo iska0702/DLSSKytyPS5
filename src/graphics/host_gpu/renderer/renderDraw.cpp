@@ -2628,11 +2628,20 @@ static void CommitIndexBuffer(const CommandSink& vk_buffer, const PreparedIndexB
 // previous VP at 320) and export current UV minus previous UV to MRT4.
 static bool IsVerifiedAstroMotionProducer(uint64_t hash) {
 	return hash == 0x00B2AAA5E8E98F3Full || hash == 0x4077CAA2B4017744ull ||
-	       hash == 0x1F603955EAA7C161ull || hash == 0xAB73801B6EF3E1D5ull;
+	       hash == 0x1F603955EAA7C161ull || hash == 0xAB73801B6EF3E1D5ull ||
+	       hash == 0x92E45C84A2FF97DAull;
+}
+
+// ASTRO BOT 01.018: PS 92E45C84A2FF97DA computes current UV minus
+// previous UV at 0x9d0..0xa74 and exports the packed pair in MRT4.rg.
+// The remaining channels contain material data, not motion. Keep this
+// distinct from Playroom's RG16 MRT4 and from unrelated RG16 effect targets.
+static bool IsVerifiedAstroBotMotionProducer(uint64_t hash) {
+	return hash == 0x92E45C84A2FF97DAull;
 }
 
 static void UpdateDLSSCamera(const CommandBuffer& buffer, const DrawRenderState& state) {
-	if (!Config::DLSSEnabled() || !state.ps_active || state.color_count == 0 ||
+	if (!Config::TemporalUpscalingEnabled() || !state.ps_active || state.color_count == 0 ||
 	    state.ps_input_info.stage.program == nullptr) return;
 	auto& context = buffer.GetContext();
 	const auto frame = context.GetGpu().GetFrameNum();
@@ -2652,7 +2661,8 @@ static void UpdateDLSSCamera(const CommandBuffer& buffer, const DrawRenderState&
 		if (descriptor.dword_count < 4) continue;
 		ShaderBufferResource resource {};
 		std::copy_n(descriptor.dwords.data(), 4, resource.fields);
-		if (resource.GetSize() != 496) continue;
+		// Bot's 576-byte view block extends the same validated 496-byte prefix.
+		if (resource.GetSize() != 496 && resource.GetSize() != 576) continue;
 		std::array<float, 124> values {};
 		if (!context.IsMapped(resource.Base48(), sizeof(values)) ||
 		    !context.SynchronizeGpuBackingForRead(resource.Base48(), sizeof(values)) ||
@@ -2674,7 +2684,7 @@ static void UpdateDLSSCamera(const CommandBuffer& buffer, const DrawRenderState&
 // Log their producer and descriptors for game-specific analysis without guessing.
 static void CaptureDLSSCameraConstants(const CommandBuffer& buffer, const DrawRenderState& state) {
 	if (!Config::DLSSDiagnosticsEnabled() || !state.ps_active ||
-	    state.ps_input_info.stage.program == nullptr || state.color_count != 5) return;
+	    state.ps_input_info.stage.program == nullptr || state.color_count < 2) return;
 	static uint64_t last_frame = UINT64_MAX;
 	static uint32_t captures = 0;
 	const auto frame = buffer.GetContext().GetGpu().GetFrameNum();
@@ -2688,7 +2698,9 @@ static void CaptureDLSSCameraConstants(const CommandBuffer& buffer, const DrawRe
 			if (descriptor.dword_count < 4) continue;
 			ShaderBufferResource resource {};
 			std::copy_n(descriptor.dwords.data(), 4, resource.fields);
-			if (resource.GetSize() != 496) continue;
+			// ASTRO BOT binds a 576-byte view block; Playroom uses 496 bytes.
+			// These are diagnostic candidates only, never a motion/camera certificate.
+			if (resource.GetSize() != 496 && resource.GetSize() != 576) continue;
 			const auto bytes = (std::min)(resource.GetSize(), uint64_t{1024});
 			const auto address = resource.Base48();
 			if (bytes < 16 || !buffer.GetContext().IsMapped(address, bytes) ||
@@ -2698,8 +2710,8 @@ static void CaptureDLSSCameraConstants(const CommandBuffer& buffer, const DrawRe
 			for (uint32_t offset = 0; offset + 16 <= bytes; offset += 16) {
 				const auto* v = values.data() + offset / 4;
 				Log::WriteToConsoleAndLog(fmt::format(
-				    "[DLSS][CameraBuffer] frame={} shader={:016X} index={} offset={} values={:.9g},{:.9g},{:.9g},{:.9g}\n",
-				    frame, stage->program->shader_hash, i, offset, v[0], v[1], v[2], v[3]));
+				    "[DLSS][CameraBuffer] frame={} shader={:016X} index={} bytes={} offset={} values={:.9g},{:.9g},{:.9g},{:.9g}\n",
+				    frame, stage->program->shader_hash, i, bytes, offset, v[0], v[1], v[2], v[3]));
 			}
 		}
 	}
@@ -3538,20 +3550,26 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		}
 	}
 	CommitStats::Mark(CommitStats::Phase::AcquireTargets);
-	if (Config::DLSSEnabled() && state.ps_active && state.ps_input_info.stage.program != nullptr &&
+	if (Config::TemporalUpscalingEnabled() && state.ps_active && state.ps_input_info.stage.program != nullptr &&
 	    state.color_count != 0 && state.depth_info.image_id &&
 	    state.depth_info.desc.view_info.format == vk::Format::eD32SfloatS8Uint) {
 		// This shader exports current UV minus previous UV into MRT4. Other RG16
 		// targets are not assumed to be motion vectors.
 		for (uint32_t i = 0; i < state.color_count; ++i) {
 			const auto& color = state.color_info[i];
-			if (color.target_slot == 4 && color.desc.view_info.format == vk::Format::eR16G16Sfloat &&
+			const bool bot = IsVerifiedAstroBotMotionProducer(state.ps_input_info.stage.program->shader_hash) ||
+			    (m_context.dlss_verified_guides.post_upscaled_color &&
+			     color.image_id == m_context.dlss_verified_guides.motion &&
+			     state.depth_info.image_id == m_context.dlss_verified_guides.depth);
+			const auto motion_format = bot ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR16G16Sfloat;
+			if (color.target_slot == 4 && color.desc.view_info.format == motion_format &&
 			    color.desc.info.samples == 1 &&
 			    color.desc.view_info.base_level == 0 && color.desc.view_info.layer_count == 1 &&
 			    (IsVerifiedAstroMotionProducer(state.ps_input_info.stage.program->shader_hash) ||
 			     (color.image_id == m_context.dlss_verified_guides.motion &&
 			      state.depth_info.image_id == m_context.dlss_verified_guides.depth))) {
 				m_context.dlss_scene_guides = {color.image_id, state.depth_info.image_id, color.Extent()};
+				m_context.dlss_scene_guides.post_upscaled_color = bot;
 				if (m_context.dlss_camera_frame == m_context.GetGpu().GetFrameNum())
 					m_context.dlss_scene_guides.camera = m_context.dlss_previous_camera;
 				m_context.dlss_verified_guides = m_context.dlss_scene_guides;

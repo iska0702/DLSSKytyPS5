@@ -19,13 +19,10 @@ An experimental fork of the **KytyPS5** PlayStation 5 emulator featuring native 
 3. **NVIDIA Reflex Low Latency**:
    - Reduces system and presentation latency (Modes: *Off*, *On*, *On + Boost*).
 
-4. **Engineered Resolution Patches (Game Patches)**:
-   - Pre-configured render resolution tiers in `_Patches/PPSA01325.json` and `_Patches/PPSA21567.json` (ASTRO BOT):
-     - **HD (720p Output)**: Ultra Perf (`428x240`), Perf (`640x360`), Balanced (`744x432`), Quality (`854x480`)
-     - **FHD (1080p Output)**: Ultra Perf (`640x360`), Perf (`960x540`), Balanced (`1114x648`), Quality (`1280x720`)
-     - **QHD / 2K (1440p Output)**: Ultra Perf (`854x480`), Perf (`1280x720`), Balanced (`1486x840`), Quality (`1708x960`)
-     - **4K (2160p Output)**: Ultra Perf (`1280x720`), Perf (`1920x1080`), Balanced (`2228x1252`), Quality (`2560x1440`)
-   - Render dimensions are aligned to even integers. Correct dimensions alone do not prevent every NGX invalid-parameter error; buffer formats, tags and feature support must also be valid.
+4. **Game resolution patches**:
+   - ASTRO BOT (`_Patches/PPSA21567.json`) has 30 profiles: Full HD, QHD/2K and 4K, separate DLSS/FSR modes, and Native AA, Quality, Balanced, Performance and Ultra Performance.
+   - Select exactly one profile. See [the complete resolution table](ASTRO_BOT_RESOLUTIONS.md). NVIDIA model presets J/K/L/M are separate launcher options and do not define render resolution.
+   - Astro's Playroom uses its separate `_Patches/PPSA01325.json` patch.
 
 ---
 
@@ -126,3 +123,7 @@ DLAA and MFG 4x. This avoids the 1708x960 Quality profile reducing UI resolution
 but uses more GPU time. Native profiles are selected automatically for DLAA;
 unsupported startup frames use spatial presentation. The regular
 `Run_Astro_DLSS_MFG.cmd` keeps the faster Quality profile.
+
+## AMD FidelityFX alternative
+
+FSR 3.1 Super Resolution and Frame Generation are available through --fsr and --fsr-fg, or launcher settings. See [README_FSR.md](README_FSR.md) for setup and current limits.

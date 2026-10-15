@@ -71,15 +71,10 @@ if(WIN32 AND EXISTS "${DIRECTSTORAGE_SDK_DIR}")
 	endforeach()
 endif()
 
-set(STREAMLINE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../streamline-sdk-v2.14.1")
+# Use STREAMLINE_SDK_DIR configured by the parent project, beside the repository.
 if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
 	set(STREAMLINE_BIN_DIR "${STREAMLINE_SDK_DIR}/bin/x64")
-	set(STREAMLINE_DLLS
-		"${STREAMLINE_BIN_DIR}/sl.interposer.dll"
-		"${STREAMLINE_BIN_DIR}/sl.common.dll"
-		"${STREAMLINE_BIN_DIR}/sl.dlss.dll"
-		"${STREAMLINE_BIN_DIR}/nvngx_dlss.dll"
-	)
+	# Runtime manifest is inherited from the parent project.
 	foreach(dll ${STREAMLINE_DLLS})
 		if(EXISTS "${dll}")
 			get_filename_component(dll_name "${dll}" NAME)
@@ -241,3 +236,11 @@ list(APPEND inc_headers
 include_what_you_use_with_mappings(launcher "${inc_headers}" "${iwyu_maps}")
 
 clang_tidy_check(launcher "" "${tidy_dirs}" "${inc_headers}")
+
+if(KYTY_ENABLE_FSR)
+    foreach(component backend_vk fsr3 fsr3upscaler opticalflow frameinterpolation)
+        add_custom_command(TARGET launcher POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FIDELITYFX_SDK_DIR}/sdk/bin/ffx_sdk/ffx_${component}_x64.dll"
+            "$<TARGET_FILE_DIR:launcher>" VERBATIM)
+    endforeach()
+endif()

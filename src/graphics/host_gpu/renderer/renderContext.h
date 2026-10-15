@@ -63,6 +63,7 @@ public:
 		ImageId depth;
 		vk::Extent2D extent {};
 		DLSSCamera camera {};
+		bool post_upscaled_color = false;
 	};
 	DLSSSceneGuides dlss_scene_guides {};
 	DLSSSceneGuides dlss_verified_guides {};

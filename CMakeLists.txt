@@ -142,7 +142,7 @@ if (KYTY_LINKER STREQUAL LD AND NOT LINUX)
 	set(KYTY_LD_OPTIONS "-Wl,--image-base=0x100000000000")
 endif()
 
-project(Kyty${KYTY_PROJECT_NAME}${CMAKE_BUILD_TYPE}${KYTY_COMPILER} VERSION 0.3.1)
+project(Kyty${KYTY_PROJECT_NAME}${CMAKE_BUILD_TYPE}${KYTY_COMPILER} VERSION 1.5.0)
 
 include_directories(
 	${KYTY_THIRD_PARTY_DIR}/gtest/include
@@ -577,7 +577,34 @@ set(inc_headers
 	${KYTY_THIRD_PARTY_DIR}/stb
 )
 
+option(KYTY_ENABLE_FSR "Enable FidelityFX FSR 3.1 Vulkan integration" ${WIN32})
+set(FIDELITYFX_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../FidelityFX-Vulkan-Source-1.1.4" CACHE PATH "FidelityFX Vulkan SDK 1.1.4 root")
+if(KYTY_ENABLE_FSR)
+    if(NOT WIN32)
+        message(FATAL_ERROR "Supplied FidelityFX binaries require Windows x64; disable KYTY_ENABLE_FSR on other platforms")
+    endif()
+    list(APPEND inc_headers "${FIDELITYFX_SDK_DIR}/sdk/include")
+    add_compile_definitions(KYTY_ENABLE_FSR=1)
+    foreach(component backend_vk fsr3 fsr3upscaler opticalflow frameinterpolation)
+        set(ffx_lib "${FIDELITYFX_SDK_DIR}/sdk/bin/ffx_sdk/ffx_${component}_x64.lib")
+        if(NOT EXISTS "${ffx_lib}")
+            message(FATAL_ERROR "Missing FidelityFX library: ${ffx_lib}")
+        endif()
+        list(APPEND kyty_emulator_link_libraries "${ffx_lib}")
+        list(APPEND kyty_fsr_libraries "${ffx_lib}")
+    endforeach()
+endif()
+
 set(STREAMLINE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../streamline-sdk-v2.14.1")
+# Runtime dependencies for every Streamline feature requested in SetupStreamline.
+set(STREAMLINE_RUNTIME_NAMES
+    sl.interposer.dll sl.common.dll sl.dlss.dll nvngx_dlss.dll
+    sl.dlss_g.dll nvngx_dlssg.dll sl.reflex.dll NvLowLatencyVk.dll sl.pcl.dll sl.nis.dll)
+set(STREAMLINE_DLLS "")
+foreach(name IN LISTS STREAMLINE_RUNTIME_NAMES)
+    list(APPEND STREAMLINE_DLLS "${STREAMLINE_SDK_DIR}/bin/x64/${name}")
+endforeach()
+
 if(EXISTS "${STREAMLINE_SDK_DIR}")
 	list(APPEND inc_headers "${STREAMLINE_SDK_DIR}/include")
 	if(WIN32)
@@ -1033,6 +1060,7 @@ target_sources(shader_recompiler_compute_tests PRIVATE
 add_kyty_full_emulator_test(virtual_memory_allocation_tests "${KYTY_TESTS_DIR}/VirtualMemoryAllocationTests.cpp")
 add_kyty_full_emulator_test(repeat_trace_tests "${KYTY_TESTS_DIR}/RepeatTraceTests.cpp")
 add_kyty_full_emulator_test(directstorage_tests "${KYTY_TESTS_DIR}/DirectStorageTests.cpp")
+target_sources(directstorage_tests PRIVATE "${KYTY_TESTS_DIR}/DlssVulkanTests.cpp")
 target_compile_definitions(virtual_memory_allocation_tests PRIVATE
 	KYTY_VIRTUAL_MEMORY_ALLOCATION_TESTS=1)
 
@@ -2235,12 +2263,6 @@ endif()
 
 if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
 	set(STREAMLINE_BIN_DIR "${STREAMLINE_SDK_DIR}/bin/x64")
-	set(STREAMLINE_DLLS
-		"${STREAMLINE_BIN_DIR}/sl.interposer.dll"
-		"${STREAMLINE_BIN_DIR}/sl.common.dll"
-		"${STREAMLINE_BIN_DIR}/sl.dlss.dll"
-		"${STREAMLINE_BIN_DIR}/nvngx_dlss.dll"
-	)
 	foreach(dll ${STREAMLINE_DLLS})
 		if(EXISTS "${dll}")
 			get_filename_component(dll_name "${dll}" NAME)
@@ -2290,6 +2312,15 @@ endif()
 install(TARGETS kyty_emulator DESTINATION .)
 if(KYTY_BUILD_LAUNCHER)
 	add_subdirectory("${KYTY_SOURCE_DIR}/launcher" "${CMAKE_CURRENT_BINARY_DIR}/launcher")
+	if(KYTY_CLANG_CL)
+		# Rebuilding just the emulator must also refresh the executable the launcher starts.
+		# launcher's own POST_BUILD command does not run when its sources are unchanged.
+		add_custom_command(TARGET kyty_emulator POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/launcher"
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:kyty_emulator>
+				"${CMAKE_CURRENT_BINARY_DIR}/launcher/$<TARGET_FILE_NAME:kyty_emulator>"
+			VERBATIM)
+	endif()
 
 	if(LINUX)
 		target_link_options(launcher PRIVATE $<$<CONFIG:Release>:-Wl,--strip-all>)
@@ -2299,13 +2330,7 @@ if(KYTY_CLANG_CL)
 	install(FILES "${KYTY_THIRD_PARTY_DIR}/winpthread/bin/libwinpthread-1.dll" DESTINATION .)
 endif()
 if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}")
-	install(FILES
-		"${STREAMLINE_SDK_DIR}/bin/x64/sl.interposer.dll"
-		"${STREAMLINE_SDK_DIR}/bin/x64/sl.common.dll"
-		"${STREAMLINE_SDK_DIR}/bin/x64/sl.dlss.dll"
-		"${STREAMLINE_SDK_DIR}/bin/x64/nvngx_dlss.dll"
-		DESTINATION .
-	)
+	install(FILES ${STREAMLINE_DLLS} DESTINATION .)
 endif()
 if(WIN32 AND EXISTS "${DIRECTSTORAGE_SDK_DIR}")
 	install(FILES
@@ -2313,4 +2338,21 @@ if(WIN32 AND EXISTS "${DIRECTSTORAGE_SDK_DIR}")
 		"${DIRECTSTORAGE_SDK_DIR}/bin/x64/dstoragecore.dll"
 		DESTINATION .
 	)
+endif()
+
+if(KYTY_ENABLE_FSR)
+    add_executable(fsr_vulkan_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/FsrVulkanTests.cpp")
+    target_include_directories(fsr_vulkan_tests PRIVATE "${FIDELITYFX_SDK_DIR}/sdk/include"
+        "${KYTY_THIRD_PARTY_DIR}/Vulkan-Headers/include")
+    target_link_libraries(fsr_vulkan_tests PRIVATE ${kyty_fsr_libraries})
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/LICENSES/FidelityFX-SDK.txt" DESTINATION LICENSES)
+    set(kyty_fsr_runtime_targets kyty_emulator fsr_vulkan_tests)
+    foreach(component backend_vk fsr3 fsr3upscaler opticalflow frameinterpolation)
+        set(ffx_dll "${FIDELITYFX_SDK_DIR}/sdk/bin/ffx_sdk/ffx_${component}_x64.dll")
+        foreach(ffx_target IN LISTS kyty_fsr_runtime_targets)
+            add_custom_command(TARGET ${ffx_target} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ffx_dll}" "$<TARGET_FILE_DIR:${ffx_target}>" VERBATIM)
+        endforeach()
+        install(FILES "${ffx_dll}" DESTINATION .)
+    endforeach()
 endif()

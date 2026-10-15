@@ -183,6 +183,10 @@ bool PlayGoHackEnabled() {
 	return g_config->playgo_hack_enabled;
 }
 
+bool FSREnabled() { return g_config->fsr_enabled; }
+bool FSRFGEnabled() { return g_config->fsr_enabled && g_config->fsr_fg_enabled; }
+bool TemporalUpscalingEnabled() { return FSREnabled() || DLSSEnabled(); }
+
 bool DLSSEnabled() {
 	return g_config->dlss_enabled;
 }

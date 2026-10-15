@@ -194,9 +194,29 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	}
 	std::printf("[DLSS] Streamline requested extra queues: compute=%u, graphics=%u\n",
 	            extra_compute_queues, extra_graphics_queues);
+    if (m_settings.diagnostics) {
+        for (const auto* req : {&reqs_dlss, &reqs_dlss_g}) {
+            for (uint32_t i=0; i<req->vkNumDeviceExtensions; ++i) std::printf("[DLSS] Required device extension: %s\n",req->vkDeviceExtensions[i]);
+            for (uint32_t i=0; i<req->vkNumInstanceExtensions; ++i) std::printf("[DLSS] Required instance extension: %s\n",req->vkInstanceExtensions[i]);
+            for (uint32_t i=0; i<req->vkNumFeatures12; ++i) std::printf("[DLSS] Required Vulkan 1.2 feature: %s\n",req->vkFeatures12[i]);
+            for (uint32_t i=0; i<req->vkNumFeatures13; ++i) std::printf("[DLSS] Required Vulkan 1.3 feature: %s\n",req->vkFeatures13[i]);
+        }
+    }
+
 
 	const uint32_t host_queues = graphics.streamline_queue_start;
 	const uint32_t compute_queues_reserved = (std::max)(extra_compute_queues, 1u);
+    const uint32_t graphics_queues_reserved = (std::max)(extra_graphics_queues, 1u);
+    if (compute_queues_reserved > graphics.streamline_queue_count ||
+        graphics_queues_reserved > graphics.streamline_queue_count - compute_queues_reserved) {
+        m_status = DLSSStatus::Unsupported;
+        m_status_message = fmt::format("Streamline requires {} dedicated queues; only {} are available",
+            compute_queues_reserved + graphics_queues_reserved, graphics.streamline_queue_count);
+        Log::WriteToConsoleAndLog("[DLSS] " + m_status_message + "\n");
+        slShutdown();
+        return false;
+    }
+
 
 	sl::VulkanInfo vk_info {};
 	vk_info.device = static_cast<VkDevice>(graphics.device);
@@ -237,6 +257,7 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	            id_props.deviceLUIDValid ? 1 : 0);
 
 	sl::AdapterInfo adapter_info {};
+    adapter_info.vkPhysicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
 	if (id_props.deviceLUIDValid) {
 		adapter_info.deviceLUID = id_props.deviceLUID.data();
 		adapter_info.deviceLUIDSizeInBytes = static_cast<uint32_t>(id_props.deviceLUID.size());
@@ -283,7 +304,7 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 	bool nis_loaded = false;
 	slIsFeatureLoaded(sl::kFeatureNIS, nis_loaded);
 	sl::Result nis_res = slIsFeatureSupported(sl::kFeatureNIS, adapter_info);
-	m_nis_supported = (nis_res == sl::Result::eOk || nis_loaded);
+	m_nis_supported = (nis_res == sl::Result::eOk && nis_loaded);
 	std::printf("[DLSS] NVIDIA Image Scaling (NIS / Sharpness) support: %d, loaded: %d\n",
 	            static_cast<int>(nis_res), nis_loaded ? 1 : 0);
 
@@ -298,25 +319,20 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 		            m_dynamic_mfg_supported ? 1 : 0);
 	}
 
-	if (res != sl::Result::eOk && !is_loaded) {
-		// As a final check, test if DLSS optimal settings can be queried on the active device
-		sl::DLSSOptions test_opt {};
-		test_opt.mode = sl::DLSSMode::eMaxQuality;
-		test_opt.outputWidth = 1920;
-		test_opt.outputHeight = 1080;
-		sl::DLSSOptimalSettings opt_settings {};
-		if (slDLSSGetOptimalSettings(test_opt, opt_settings) == sl::Result::eOk) {
-			std::printf("[DLSS] slDLSSGetOptimalSettings succeeded -> DLSS is supported and active!\n");
-			res = sl::Result::eOk;
-		} else {
-			m_status = DLSSStatus::Unsupported;
-			m_status_message = fmt::format("DLSS unsupported on GPU (res {}, load {})", static_cast<int>(res), static_cast<int>(load_res));
-			std::printf("[DLSS] %s\n", m_status_message.c_str());
-			std::fflush(stdout);
-			m_available = false;
-			return false;
-		}
-	}
+
+    if (res != sl::Result::eOk || !is_loaded) {
+        m_status = DLSSStatus::Unsupported;
+        m_status_message = fmt::format("DLSS unavailable on this Vulkan device (support {}, loaded {}, load query {})",
+            static_cast<int>(res), is_loaded, static_cast<int>(load_res));
+        Log::WriteToConsoleAndLog("[DLSS] " + m_status_message + "\n");
+        m_available = false;
+        slShutdown();
+        return false;
+    }
+    if (m_settings.fg_enabled && (!m_fg_supported || !m_reflex_supported)) {
+        m_fg_supported = false;
+        Log::WriteToConsoleAndLog("[DLSS] Frame Generation unavailable: both DLSS-G and Reflex must be supported and loaded. Super Resolution remains available.\n");
+    }
 
 	m_streamline_loaded = true;
 	m_available = true;
@@ -831,6 +847,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	in_color_res.mipLevels = 1;
 	in_color_res.arrayLayers = 1;
 	in_color_res.usage = static_cast<uint32_t>(source_image.usage);
+	in_color_res.flags = static_cast<uint32_t>(source_image.flags);
 
 	sl::Resource out_color_res(sl::ResourceType::eTex2d,
 	                           static_cast<void*>(static_cast<VkImage>(m_output_image.image)),
@@ -843,6 +860,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	out_color_res.mipLevels = 1;
 	out_color_res.arrayLayers = 1;
 	out_color_res.usage = static_cast<uint32_t>(m_output_image.usage);
+	out_color_res.flags = static_cast<uint32_t>(m_output_image.flags);
 
 	sl::Resource depth_res(sl::ResourceType::eTex2d,
 	                       static_cast<void*>(static_cast<VkImage>(depth_image.image)),
@@ -855,6 +873,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	depth_res.mipLevels = 1;
 	depth_res.arrayLayers = 1;
 	depth_res.usage = static_cast<uint32_t>(depth_image.usage);
+	depth_res.flags = static_cast<uint32_t>(depth_image.flags);
 
 	sl::Resource mvec_res(sl::ResourceType::eTex2d,
 	                      static_cast<void*>(static_cast<VkImage>(motion_image.image)),
@@ -867,6 +886,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	mvec_res.mipLevels = 1;
 	mvec_res.arrayLayers = 1;
 	mvec_res.usage = static_cast<uint32_t>(motion_image.usage);
+	mvec_res.flags = static_cast<uint32_t>(motion_image.flags);
 
 	// Define explicit input and output view extents so Streamline knows the exact scaling rectangle
 	const sl::Extent in_extent { 0, 0, source_extent.width, source_extent.height };
@@ -898,6 +918,8 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		                                  : static_cast<uint32_t>(m_output_image.format);
 		backbuffer_res.mipLevels = 1;
 		backbuffer_res.arrayLayers = 1;
+		backbuffer_res.flags = 0;
+		backbuffer_res.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		backbuffer_res.internalFlags = sl::Resource::eVulkanSwapChainImage;
 		tags.emplace_back(&backbuffer_res, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &out_extent);
 	}

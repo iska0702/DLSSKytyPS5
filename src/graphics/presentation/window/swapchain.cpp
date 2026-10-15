@@ -19,9 +19,11 @@
 #include "graphics/presentation/videoOut.h"
 #include "graphics/presentation/window/windowInternal.h"
 #include "graphics/presentation/dlss/dlssManager.h"
+#include "graphics/presentation/dlss/fsrManager.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -251,6 +253,21 @@ void Presenter::Frame::CopyFrom(CommandBuffer& command_buffer, Image& source) {
 	source.Transit(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead, {},
 	               command);
 	Transit(command, vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite);
+	const bool convert_packed_color = source.backing.format == vk::Format::eA2R10G10B10UnormPack32 &&
+	                                  image.format == vk::Format::eA2B10G10R10UnormPack32;
+	if (source.backing.extent.width != image.extent.width || source.backing.extent.height != image.extent.height ||
+	    convert_packed_color) {
+		vk::ImageBlit blit {};
+		blit.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, source.backing.layers};
+		blit.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, image.layers};
+		blit.srcOffsets[1] = {static_cast<int32_t>(source.backing.extent.width),
+		                      static_cast<int32_t>(source.backing.extent.height), 1};
+		blit.dstOffsets[1] = {static_cast<int32_t>(image.extent.width), static_cast<int32_t>(image.extent.height), 1};
+		EXIT_IF(blit.srcSubresource.layerCount != blit.dstSubresource.layerCount);
+		command.blitImage(source.backing.image, vk::ImageLayout::eTransferSrcOptimal, image.image,
+		                  vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
+		return;
+	}
 	vk::ImageCopy copy {};
 	copy.srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, source.backing.layers};
 	copy.dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, image.layers};
@@ -288,7 +305,7 @@ void Presenter::Frame::CaptureGuides(CommandBuffer& buffer, RenderContext& rende
 			    candidate.extent.width, candidate.extent.height, image.extent.width, image.extent.height));
 		}
 	}
-	if (!Config::DLSSEnabled() || !candidate.motion || !candidate.depth ||
+	if (!Config::TemporalUpscalingEnabled() || !candidate.motion || !candidate.depth ||
 	    candidate.extent.width != image.extent.width || candidate.extent.height != image.extent.height)
 		return;
 	auto& cache = renderer.GetTextureCache();
@@ -647,7 +664,9 @@ void Swapchain::Create() {
 		}
 	}
 	create_info.clipped = VK_TRUE;
-	if (DLSSManager::Instance().HasCreateSwapchainProxy()) {
+	if (FSRManager::Instance().CreateSwapchain(graphics, create_info, m_handle)) {
+		LOGF("[FSR] FidelityFX interpolation swapchain created\n");
+	} else if (DLSSManager::Instance().HasCreateSwapchainProxy()) {
 		VkSwapchainKHR sc = VK_NULL_HANDLE;
 		const auto res = DLSSManager::Instance().CreateSwapchain(
 			static_cast<VkDevice>(graphics.device),
@@ -664,7 +683,10 @@ void Swapchain::Create() {
 
 	m_images = EnumerateVulkan<vk::Image>(
 	    "vkGetSwapchainImagesKHR", [&](uint32_t* count, vk::Image* images) {
-		    if (DLSSManager::Instance().HasGetSwapchainImagesProxy()) {
+		    if (FSRManager::Instance().OwnsSwapchain()) {
+                return FSRManager::Instance().GetImages(graphics, m_handle, count, images);
+            }
+            if (DLSSManager::Instance().HasGetSwapchainImagesProxy()) {
 			    return static_cast<vk::Result>(DLSSManager::Instance().GetSwapchainImages(
 			        static_cast<VkDevice>(graphics.device), static_cast<VkSwapchainKHR>(m_handle),
 			        count, reinterpret_cast<VkImage*>(images)));
@@ -746,6 +768,7 @@ void Swapchain::Destroy() {
 	m_filter.Release(graphics.device);
 	m_cas.Release(graphics.device);
 	DLSSManager::Instance().ReleaseResources(graphics);
+	FSRManager::Instance().ReleaseResources(graphics);
 
 	for (const auto semaphore: m_image_acquired) {
 		if (semaphore != nullptr) {
@@ -763,7 +786,9 @@ void Swapchain::Destroy() {
 		}
 	}
 	if (m_handle != nullptr) {
-		if (DLSSManager::Instance().HasDestroySwapchainProxy()) {
+		if (FSRManager::Instance().OwnsSwapchain()) {
+            FSRManager::Instance().DestroySwapchain(graphics, m_handle);
+        } else if (DLSSManager::Instance().HasDestroySwapchainProxy()) {
 			DLSSManager::Instance().DestroySwapchain(
 				static_cast<VkDevice>(graphics.device),
 				static_cast<VkSwapchainKHR>(m_handle),
@@ -856,7 +881,9 @@ Swapchain::Status Swapchain::AcquireNextImage(CommandScheduler& scheduler) {
 		m_frame_ticks[m_frame_index] = 0;
 	}
 	vk::Result result;
-	if (DLSSManager::Instance().HasAcquireNextImageProxy()) {
+	if (FSRManager::Instance().OwnsSwapchain()) {
+        result = FSRManager::Instance().Acquire(m_window.graphic_ctx, m_handle, m_image_acquired[m_frame_index], &m_image_index);
+    } else if (DLSSManager::Instance().HasAcquireNextImageProxy()) {
 		const auto res = DLSSManager::Instance().AcquireNextImage(
 			static_cast<VkDevice>(m_window.graphic_ctx.device),
 			static_cast<VkSwapchainKHR>(m_handle),
@@ -1331,7 +1358,14 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	// Evaluate DLSS Super Resolution if enabled
 	VulkanImage* dlss_upscaled_image = nullptr;
 	bool dlss_evaluated = false;
-	if (source != nullptr && (Config::DLSSEnabled() || DLSSManager::Instance().IsActive())) {
+    bool fsr_evaluated = false;
+    if (source == nullptr && Config::FSREnabled()) FSRManager::Instance().Suspend();
+    if (source != nullptr && Config::FSREnabled()) {
+        fsr_evaluated = FSRManager::Instance().Evaluate(m_window.graphic_ctx, vk_command, source->image,
+            source_extent, m_extent, source->guides, dlss_upscaled_image);
+        dlss_evaluated = fsr_evaluated;
+    }
+	if (source != nullptr && !Config::FSREnabled() && (Config::DLSSEnabled() || DLSSManager::Instance().IsActive())) {
 		if (source->view == nullptr) {
 			vk::ImageViewCreateInfo view {};
 			view.image            = source->image.image;
@@ -1353,19 +1387,20 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 	}
 
 	static uint32_t s_present_stat_counter = 0;
-	const bool spatial_fallback = Config::DLSSEnabled() && !dlss_evaluated && source != nullptr &&
+	const bool spatial_fallback = Config::TemporalUpscalingEnabled() && !dlss_evaluated && source != nullptr &&
 	    source_extent.width <= m_extent.width && source_extent.height <= m_extent.height;
 	if (++s_present_stat_counter % 300 == 1 && source != nullptr) {
 		Log::WriteToConsoleAndLog(fmt::format(
-			"[Present] Frame {}: Source {}x{} -> Swapchain {}x{}, DLSS Evaluated: {}, CAS Filter: {}\n",
+			"[Present] Frame {}: Source {}x{} -> Swapchain {}x{}, DLSS Evaluated: {}, FSR Evaluated: {}, CAS Filter: {}\n",
 			s_present_stat_counter, source_extent.width, source_extent.height,
-			m_extent.width, m_extent.height, dlss_evaluated ? "YES" : "NO",
-			(Config::GetDLSSSharpness() > 0.001f && !spatial_fallback) ? "YES" : "NO"));
+			m_extent.width, m_extent.height, (dlss_evaluated && !fsr_evaluated) ? "YES" : "NO",
+			fsr_evaluated ? "YES" : "NO",
+			(Config::GetDLSSSharpness() > 0.001f && !spatial_fallback && !fsr_evaluated) ? "YES" : "NO"));
 	}
 
 	const float raw_sharpness = Config::GetDLSSSharpness();
 	const float sharpness     = std::clamp(raw_sharpness, 0.0f, 1.0f);
-	const bool  use_cas       = sharpness > 0.001f && !spatial_fallback;
+	const bool  use_cas       = sharpness > 0.001f && !spatial_fallback && !fsr_evaluated;
 	const bool  filtered      = !dlss_evaluated && source != nullptr && !use_cas &&
 	                            (spatial_fallback || (PresentBoxDownscaleEnabled() && PresentNeedsFilter(source_extent, m_extent)));
 	const bool  renders_to_attachment = (dlss_evaluated && use_cas) || filtered ||
@@ -1555,12 +1590,24 @@ void Swapchain::RecordPresentCommands(CommandBuffer& command, Presenter::Frame* 
 		                           vk::DependencyFlagBits::eByRegion, 0, nullptr, 0, nullptr, 1,
 		                           &to_present);
 	}
+    if (FSRManager::Instance().OwnsSwapchain()) {
+        vk::ImageMemoryBarrier sampled {};
+        sampled.srcAccessMask = vk::AccessFlagBits::eMemoryWrite;
+        sampled.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        sampled.oldLayout = vk::ImageLayout::ePresentSrcKHR;
+        sampled.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        sampled.srcQueueFamilyIndex = sampled.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        sampled.image = m_images[m_image_index];
+        sampled.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+        vk_command.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
+            {}, 0, nullptr, 0, nullptr, 1, &sampled);
+    }
 }
 
 uint64_t Swapchain::Submit(CommandScheduler& scheduler) {
 	EXIT_IF(m_frame_index >= m_image_acquired.size() || m_image_index >= m_render_complete.size());
 	SubmitInfo submit;
-	submit.AddWait(m_image_acquired[m_frame_index], 1, vk::PipelineStageFlagBits::eTransfer);
+	submit.AddWait(m_image_acquired[m_frame_index], 1, vk::PipelineStageFlagBits::eAllCommands);
 	submit.AddSignal(m_render_complete[m_image_index]);
 	const auto tick = scheduler.Submit(submit);
 	if (m_frame_index < m_frame_ticks.size()) {
@@ -1590,7 +1637,9 @@ Swapchain::Status Swapchain::Present() {
 		Common::LockGuard lock(m_window.graphic_ctx.queue_mutex);
 		m_window.graphic_ctx.submission_queue.DrainReadyForPresentLocked();
 		DLSSManager::Instance().SetPresentMarker(true);
-		if (DLSSManager::Instance().HasQueuePresentProxy()) {
+		if (FSRManager::Instance().OwnsSwapchain()) {
+            result = FSRManager::Instance().Present(m_window.graphic_ctx, present);
+        } else if (DLSSManager::Instance().HasQueuePresentProxy()) {
 			const auto res = DLSSManager::Instance().QueuePresent(
 				static_cast<VkQueue>(m_window.graphic_ctx.queue),
 				reinterpret_cast<const VkPresentInfoKHR*>(&present));
@@ -1632,6 +1681,11 @@ Presenter::Frame& Presenter::PrepareFrame(CommandBuffer& buffer, const ImageInfo
 	switch (frame_format) {
 		case vk::Format::eR8G8B8A8Srgb: frame_format = vk::Format::eR8G8B8A8Unorm; break;
 		case vk::Format::eB8G8R8A8Srgb: frame_format = vk::Format::eB8G8R8A8Unorm; break;
+		case vk::Format::eA2R10G10B10UnormPack32:
+			// Streamline's Vulkan format table supports A2B10G10R10, but not A2R10G10B10.
+			// Convert channels with a blit; changing just the tag would swap red and blue.
+			if (Config::TemporalUpscalingEnabled()) frame_format = vk::Format::eA2B10G10R10UnormPack32;
+			break;
 		default: break;
 	}
 	auto* frame = m_impl->frames.Acquire({info.extent.width, info.extent.height}, frame_format);
@@ -1640,8 +1694,20 @@ Presenter::Frame& Presenter::PrepareFrame(CommandBuffer& buffer, const ImageInfo
 	if (image.backing.format == vk::Format::eUndefined) {
 		EXIT("unsupported presentation source, image=%p\n", static_cast<const void*>(&image));
 	}
-	frame->Configure(m_impl->window.graphic_ctx,
-	                 {image.backing.extent.width, image.backing.extent.height}, frame_format);
+	vk::Extent2D input_extent {image.backing.extent.width, image.backing.extent.height};
+	const auto& candidate = m_impl->renderer.dlss_scene_guides;
+	// Bot presents a guest-upscaled 4K image while its certified depth/motion
+	// remain at the internal size. Normalize color to that grid before the
+	// host temporal pass. This compatibility path retains guest postprocessing;
+	// it does not bypass the guest upscaler or reduce guest rendering cost.
+	if (Config::TemporalUpscalingEnabled() && candidate.post_upscaled_color && candidate.camera.valid &&
+	    candidate.extent.width > 0 && candidate.extent.height > 0 &&
+	    candidate.extent.width <= input_extent.width && candidate.extent.height <= input_extent.height &&
+	    std::abs(static_cast<double>(input_extent.width) / input_extent.height -
+	             static_cast<double>(candidate.extent.width) / candidate.extent.height) < 0.005) {
+		input_extent = candidate.extent;
+	}
+	frame->Configure(m_impl->window.graphic_ctx, input_extent, frame_format);
 	frame->CopyFrom(buffer, image);
 	frame->CaptureGuides(buffer, m_impl->renderer);
 	return *frame;

@@ -24,6 +24,7 @@
 #include "libs/controller.h"
 #include "loader/systemContent.h"
 #include "graphics/presentation/dlss/dlssManager.h"
+#include "graphics/presentation/dlss/fsrManager.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -1014,7 +1015,7 @@ void WindowContext::UpdateTitle() {
 	}
 
 	const auto* device_name = graphic_ctx.GetPhysicalDeviceProperties().deviceName.data();
-	const auto  dlss_info   = DLSSManager::Instance().GetOverlayInfo();
+	const auto  dlss_info   = Config::FSREnabled() ? FSRManager::Instance().GetOverlayInfo() : DLSSManager::Instance().GetOverlayInfo();
 	const auto  multiplier  = DLSSManager::Instance().GetEffectiveMultiplier();
 	std::string fps_text;
 	if (multiplier > 1 && current_fps > 0.0) {

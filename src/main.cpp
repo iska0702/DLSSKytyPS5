@@ -145,6 +145,10 @@ static void PrintUsage() {
 	::printf(
 	    "  --trophy-notifications <true|false>   Show trophy unlock toasts and play their sound.\n");
 	::printf("  --playgo-hack                       Use the supplied PlayGo stub fallback.\n");
+	::printf("  --fsr                               Enable AMD FSR 3.1 Vulkan upscaling (takes precedence over DLSS).\n");
+	::printf("  --fsr-fg                            Enable FSR and 2x frame generation.\n");
+	::printf("  --fsr-sharpness <0.0-1.0>           Set FSR sharpening strength.\n");
+	::printf("  --no-fsr                            Disable FSR and its frame generation.\n");
 	::printf("  --dlss                              Enable NVIDIA DLSS Super Resolution.\n");
 	::printf("  --dlss-mode <mode>                  UltraPerformance, Performance, Balanced, Quality, DLAA.\n");
 	::printf("  --dlss-sharpness <0.0-1.0>          Presentation CAS sharpness. Default: 0.35.\n");
@@ -312,6 +316,17 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 			continue;
 		}
 
+		if (arg == "--fsr" || arg == "--fsr-fg") {
+			options.config.fsr_enabled = true;
+			options.config.fsr_fg_enabled |= arg == "--fsr-fg";
+			continue;
+		}
+		if (arg == "--no-fsr") {
+			options.config.fsr_enabled = false;
+			options.config.fsr_fg_enabled = false;
+			continue;
+		}
+
 		if (arg == "--dlss") {
 			options.config.dlss_enabled = true;
 			if (i + 1 < argc) {
@@ -348,6 +363,7 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 		}
 
 		if (arg == "--dlss-fg") {
+			options.config.dlss_enabled = true;
 			options.config.dlss_fg_enabled = true;
 			if (i + 1 < argc) {
 				std::string next_val = argv[i + 1];
@@ -625,7 +641,7 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 					return false;
 				}
 			}
-		} else if (arg == "--dlss-sharpness") {
+		} else if (arg == "--dlss-sharpness" || arg == "--fsr-sharpness") {
 			float sharpness = 0.0f;
 			try {
 				sharpness = std::stof(value);

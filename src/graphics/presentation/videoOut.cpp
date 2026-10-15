@@ -1843,7 +1843,7 @@ KYTY_SYSV_ABI int VideoOutGetOutputStatus(int handle, VideoOutOutputStatus* stat
 	// When DLSS Super Resolution is enabled, report 1080p (0u) to the PS5 game so that
 	// the game's internal presentation and framebuffers are created at 1920x1080,
 	// allowing DLSS to upscale 1080p -> 1440p or 4K.
-	if (Config::DLSSEnabled() && Config::GetDLSSMode() != 0) {
+	if (Config::FSREnabled() || (Config::DLSSEnabled() && Config::GetDLSSMode() != 0)) {
 		status->resolution = 0u;
 	} else if (Config::GetScreenWidth() >= 3840 && Config::GetScreenHeight() >= 2160) {
 		status->resolution = 1u;

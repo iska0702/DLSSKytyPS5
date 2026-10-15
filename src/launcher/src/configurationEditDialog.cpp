@@ -16,6 +16,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLayout>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListView>
 #include <QListWidget>
@@ -231,7 +232,36 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	m_ui->compatibilityLayout->addWidget(m_directstorage_checkbox);
 #endif
 
-	setSizeGripEnabled(true);
+    auto* fsrGroup = new QGroupBox(tr("AMD FidelityFX FSR 3.1 (Experimental)"), this);
+    auto* fsrLayout = new QVBoxLayout(fsrGroup);
+    m_fsr_checkbox = new QCheckBox(tr("Enable FSR Super Resolution"), fsrGroup);
+    m_fsr_fg_checkbox = new QCheckBox(tr("Enable FSR Frame Generation (2x)"), fsrGroup);
+    m_fsr_checkbox->setToolTip(tr("Uses verified guest depth, motion and camera data. Takes precedence over DLSS. Render resolution is selected in game patches; sharpness is set below."));
+    m_fsr_fg_checkbox->setToolTip(tr("Requires two dedicated Vulkan queues. Pauses in scenes without temporal inputs. Guest HUD may show interpolation artifacts."));
+    fsrLayout->addWidget(m_fsr_checkbox);
+    fsrLayout->addWidget(m_fsr_fg_checkbox);
+    auto* sharpnessLabel = new QLabel(tr("FSR sharpness"), fsrGroup);
+    m_fsr_sharpness = new QSlider(Qt::Horizontal, fsrGroup);
+    m_fsr_sharpness->setRange(0, 100);
+    fsrLayout->addWidget(sharpnessLabel);
+    fsrLayout->addWidget(m_fsr_sharpness);
+    connect(m_fsr_sharpness, &QSlider::valueChanged, sharpnessLabel, [sharpnessLabel](int value) {
+        sharpnessLabel->setText(tr("FSR sharpness: %1").arg(value / 100.0, 0, 'f', 2));
+    });
+    m_ui->compatibilityLayout->addWidget(fsrGroup);
+#if !KYTY_ENABLE_FSR
+    fsrGroup->setEnabled(false);
+    fsrGroup->setToolTip(tr("This build does not include FidelityFX Vulkan libraries."));
+#endif
+    connect(m_fsr_checkbox, &QCheckBox::toggled, this, [this](bool enabled) {
+        m_fsr_fg_checkbox->setEnabled(enabled);
+        m_fsr_sharpness->setEnabled(enabled);
+        if (enabled) m_ui->checkBox_dlss_enable->setChecked(false);
+    });
+    connect(m_ui->checkBox_dlss_enable, &QCheckBox::toggled, this, [this](bool enabled) {
+        if (enabled) m_fsr_checkbox->setChecked(false);
+    });
+    setSizeGripEnabled(true);
 
 	restoreGeometry(g_last_geometry);
 
@@ -437,6 +467,11 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 
 	m_ui->checkBox_dlss_diagnostics->setChecked(info.dlss_diagnostics);
 	m_ui->checkBox_dlss_enable->setChecked(info.dlss_enabled);
+    m_fsr_checkbox->setChecked(info.fsr_enabled);
+    m_fsr_fg_checkbox->setChecked(info.fsr_fg_enabled);
+    m_fsr_fg_checkbox->setEnabled(info.fsr_enabled);
+    m_fsr_sharpness->setValue(qBound(0, static_cast<int>(std::round(info.dlss_sharpness * 100.0f)), 100));
+    m_fsr_sharpness->setEnabled(info.fsr_enabled);
 
 	UpdateDLSSUI();
 }
@@ -758,6 +793,9 @@ void ConfigurationEditDialog::save() {
 	}
 
 	UpdateInfo(m_info, *m_ui, m_global_settings);
+    m_info.fsr_enabled = m_fsr_checkbox->isChecked();
+    m_info.fsr_fg_enabled = m_info.fsr_enabled && m_fsr_fg_checkbox->isChecked();
+    if (m_info.fsr_enabled) m_info.dlss_sharpness = m_fsr_sharpness->value() / 100.0f;
 #if defined(_WIN32)
 	if (m_directstorage_checkbox != nullptr) {
 		m_info.directstorage_enabled = m_directstorage_checkbox->isChecked();
