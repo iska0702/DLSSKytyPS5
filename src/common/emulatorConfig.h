@@ -88,6 +88,7 @@ struct ConfigOptions {
 	bool                   playgo_hack_enabled         = false;
 	bool                   fsr_enabled                 = false;
 	bool                   fsr_fg_enabled              = false;
+	bool                   dlss_rr_enabled             = false;
 	bool                   dlss_enabled                = false;
 	uint32_t               dlss_mode                   = 4;
 	float                  dlss_sharpness              = 0.35f;
@@ -113,6 +114,7 @@ uint32_t GetDLSSMode();
 float GetDLSSSharpness();
 uint32_t GetDLSSPreset();
 bool DLSSDiagnosticsEnabled();
+bool DLSSRREnabled();
 bool DLSSFGEnabled();
 uint32_t GetDLSSFGMode();
 uint32_t GetReflexMode();

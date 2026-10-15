@@ -153,6 +153,7 @@ static void PrintUsage() {
 	::printf("  --dlss-mode <mode>                  UltraPerformance, Performance, Balanced, Quality, DLAA.\n");
 	::printf("  --dlss-sharpness <0.0-1.0>          Presentation CAS sharpness. Default: 0.35.\n");
 	::printf("  --dlss-preset <preset>              Default, PresetJ, PresetK, PresetL, PresetM.\n");
+	::printf("  --dlss-rr                           Request RR lighting backend (requires certified pre-denoise HDR inputs).\n");
 	::printf("  --dlss-diagnostics                  Enable verbose DLSS & Streamline diagnostics.\n");
 	::printf("  --dlss-fg                           Enable DLSS Frame Generation (2x frame multiplier).\n");
 	::printf("  --dlss-mfg <3x|4x|dynamic>          Enable Multi-Frame Generation (3x, 4x, or dynamic).\n");
@@ -354,6 +355,12 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 					i++;
 				}
 			}
+			continue;
+		}
+
+		if (arg == "--dlss-rr") {
+			options.config.dlss_enabled = true;
+			options.config.dlss_rr_enabled = true;
 			continue;
 		}
 

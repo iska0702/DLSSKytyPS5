@@ -6,11 +6,110 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cmath>
 #include <stdexcept>
 #include <vector>
 
 using namespace Libs::Graphics;
-int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD) {
+
+static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
+    auto check = [](vk::Result result, const char* name) {
+        if (result != vk::Result::eSuccess) throw std::runtime_error(std::string(name) + ": " + vk::to_string(result));
+    };
+    if (!rr.IsSupported()) throw std::runtime_error(rr.Status());
+    std::array<VulkanImage,8> images;
+    std::array<vk::ImageView,8> views {};
+    RRInputs in; in.certified_pre_denoise = true;
+    std::array<RRTexture*,8> textures {&in.noisy_hdr,&in.diffuse_albedo,&in.specular_albedo,
+        &in.normal_roughness,&in.depth,&in.motion,&in.specular_hit_distance,&in.output_hdr};
+    for (size_t i=0; i<images.size(); ++i) {
+        auto& t=*textures[i];
+        t.extent = i==7 ? vk::Extent2D{1280,720} : vk::Extent2D{640,360};
+        t.format = i==4 || i==6 ? vk::Format::eR32Sfloat : i==5 ? vk::Format::eR16G16Sfloat : vk::Format::eR16G16B16A16Sfloat;
+        vk::ImageCreateInfo create {}; create.imageType=vk::ImageType::e2D; create.format=t.format;
+        create.extent={t.extent.width,t.extent.height,1}; create.mipLevels=create.arrayLayers=1;
+        create.samples=vk::SampleCountFlagBits::e1; create.tiling=vk::ImageTiling::eOptimal;
+        create.usage=vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eStorage;
+        if (!g.CreateImage(create,images[i])) throw std::runtime_error("RR image allocation failed");
+        vk::ImageViewCreateInfo view {}; view.image=images[i].image; view.viewType=vk::ImageViewType::e2D;
+        view.format=t.format; view.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+        check(g.device.createImageView(&view,nullptr,&views[i]),"RR image view");
+        VmaAllocationInfo allocation {}; vmaGetAllocationInfo(g.allocator,images[i].allocation,&allocation);
+        t.image=images[i].image; t.view=views[i]; t.memory=allocation.deviceMemory; t.usage=create.usage;
+        t.layout=i==7 ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal;
+    }
+    std::array<float,124> camera {};
+    camera[0]=1.20628512f; camera[5]=2.14450693f; camera[10]=-1.00010002f; camera[11]=-1; camera[14]=-.100010008f;
+    std::copy_n(camera.data(),16,camera.data()+32);
+    camera[16]=camera[21]=camera[26]=camera[31]=camera[48]=camera[53]=camera[58]=camera[63]=1;
+    camera[106]=.1f; camera[107]=999.934143f; camera[108]=640; camera[109]=360;
+    in.camera=DecodeAstroDLSSCamera(camera,640,360);
+    in.world_to_view[0]=in.world_to_view[5]=in.world_to_view[10]=in.world_to_view[15]=1;
+    in.view_to_world=in.world_to_view;
+    vk::CommandPoolCreateInfo poolInfo {}; poolInfo.queueFamilyIndex=g.queue_family; poolInfo.flags=vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+    vk::CommandPool pool; check(g.device.createCommandPool(&poolInfo,nullptr,&pool),"RR pool");
+    vk::CommandBufferAllocateInfo alloc {}; alloc.commandPool=pool; alloc.commandBufferCount=1;
+    vk::CommandBuffer command; check(g.device.allocateCommandBuffers(&alloc,&command),"RR command");
+    VkBuffer staging=VK_NULL_HANDLE; VmaAllocation stagingAllocation=nullptr;
+    VkBufferCreateInfo stagingInfo {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; stagingInfo.size=1280*720*8;
+    stagingInfo.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo host {}; host.usage=VMA_MEMORY_USAGE_GPU_TO_CPU;
+    if (vmaCreateBuffer(g.allocator,&stagingInfo,&host,&staging,&stagingAllocation,nullptr)!=VK_SUCCESS)
+        throw std::runtime_error("RR staging allocation failed");
+    auto barrier=[&](vk::Image image,vk::ImageLayout before,vk::ImageLayout after) {
+        vk::ImageMemoryBarrier b {}; b.srcAccessMask=vk::AccessFlagBits::eMemoryRead|vk::AccessFlagBits::eMemoryWrite;
+        b.dstAccessMask=b.srcAccessMask; b.oldLayout=before; b.newLayout=after;
+        b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED; b.image=image;
+        b.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
+        command.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,vk::PipelineStageFlagBits::eAllCommands,{},0,nullptr,0,nullptr,1,&b);
+    };
+    for (uint32_t frame=0;frame<3;++frame) {
+        check(command.reset({}),"RR reset"); vk::CommandBufferBeginInfo begin {}; check(command.begin(&begin),"RR begin");
+        for (size_t i=0;i<7;++i) {
+            auto& t=*textures[i]; barrier(t.image,frame==0?vk::ImageLayout::eUndefined:t.layout,vk::ImageLayout::eTransferDstOptimal);
+            vk::ClearColorValue clear {}; clear.float32[3]=1;
+            if (i==0) {clear.float32[0]=.15f;clear.float32[1]=.3f;clear.float32[2]=.6f;}
+            if (i==1 || i==2) for(int c=0;c<3;++c)clear.float32[c]=i==1?.5f:.04f;
+            if (i==3) {clear.float32[2]=1;clear.float32[3]=.5f;}
+            if (i==4) clear.float32[0]=.5f;
+            if (i==6) clear.float32[0]=1;
+            vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor,0,1,0,1};
+            command.clearColorImage(t.image,vk::ImageLayout::eTransferDstOptimal,&clear,1,&range);
+            barrier(t.image,vk::ImageLayout::eTransferDstOptimal,t.layout);
+        }
+        barrier(in.output_hdr.image,frame==0?vk::ImageLayout::eUndefined:vk::ImageLayout::eTransferSrcOptimal,vk::ImageLayout::eGeneral);
+        in.camera.reset=frame==0;
+        if (!rr.Evaluate(command,in,DLSSMode::Performance,frame))throw std::runtime_error(rr.Status());
+        barrier(in.output_hdr.image,vk::ImageLayout::eGeneral,vk::ImageLayout::eTransferSrcOptimal);
+        vk::BufferImageCopy copy {}; copy.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1};copy.imageExtent={1280,720,1};
+        command.copyImageToBuffer(in.output_hdr.image,vk::ImageLayout::eTransferSrcOptimal,staging,1,&copy);
+        check(command.end(),"RR end");vk::SubmitInfo submit {};submit.commandBufferCount=1;submit.pCommandBuffers=&command;
+        check(g.queue.submit(1,&submit,nullptr),"RR submit");check(g.device.waitIdle(),"RR wait");
+        void* mapped=nullptr;if(vmaMapMemory(g.allocator,stagingAllocation,&mapped)!=VK_SUCCESS)throw std::runtime_error("RR map failed");
+        vmaInvalidateAllocation(g.allocator,stagingAllocation,0,VK_WHOLE_SIZE);
+        const auto* center=static_cast<const uint16_t*>(mapped)+(360*1280+640)*4;
+        const bool finite=std::all_of(center,center+3,[](uint16_t h){return (h&0x7c00)!=0x7c00;});
+        const bool nonzero=(center[0]&0x7fff)||(center[1]&0x7fff)||(center[2]&0x7fff);
+        std::printf("RR HDR frame %u: RGB half bits=%04x,%04x,%04x\n",frame,center[0],center[1],center[2]);
+        auto half = [](uint16_t h) {
+            const int exponent = (h >> 10) & 31;
+            const float sign = h & 0x8000 ? -1.0f : 1.0f;
+            return sign * (exponent == 0 ? std::ldexp(static_cast<float>(h & 1023), -24)
+                : std::ldexp(1.0f + static_cast<float>(h & 1023)/1024.0f, exponent-15));
+        };
+        const bool reference = std::abs(half(center[0])-.15f)<.025f &&
+            std::abs(half(center[1])-.3f)<.025f && std::abs(half(center[2])-.6f)<.025f;
+        vmaUnmapMemory(g.allocator,stagingAllocation);
+        if(!finite||!nonzero||!reference)throw std::runtime_error("RR HDR output failed constant-radiance reference");
+    }
+    rr.Shutdown();
+    vmaDestroyBuffer(g.allocator,staging,stagingAllocation);
+    for(size_t i=0;i<images.size();++i){g.device.destroyImageView(views[i],nullptr);g.DeleteImage(images[i]);}
+    g.device.destroyCommandPool(pool,nullptr);
+    std::puts("DLSS Ray Reconstruction HDR dispatch + GPU readback: PASS (synthetic lighting, not game integration)");
+}
+
+int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
     const vk::Extent2D targetExtent = fullHD ? vk::Extent2D{1920,1080} : vk::Extent2D{1280,720};
     const vk::Extent2D inputExtent = fullHD ? vk::Extent2D{1280,720} : vk::Extent2D{854,480};
 #if !defined(_WIN32)
@@ -79,11 +178,13 @@ int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD) {
         if (!g.CreateAllocator()) throw std::runtime_error("Create allocator failed");
         auto& dlss = DLSSManager::Instance();
         DLSSSettings settings; settings.enabled = settings.fg_enabled = true;
+        settings.rr_enabled = rrTest; if (rrTest) settings.fg_enabled = false;
         settings.mode = DLSSMode::Quality; settings.fg_mode = DLSSGMode::FG_2X;
         settings.reflex_mode = ReflexMode::On; settings.diagnostics = requirementsOnly;
-        if (!dlss.Initialize(g, settings) || !dlss.IsFGSupported() || !dlss.IsReflexSupported())
+        if (!dlss.Initialize(g, settings) || (!rrTest && (!dlss.IsFGSupported() || !dlss.IsReflexSupported())))
             throw std::runtime_error("DLSS-G and Reflex not available: " + dlss.GetStatusMessage());
-        if (requirementsOnly) {
+        if (rrTest) RunRRLightingSmoke(g, dlss.RayReconstruction());
+        if (requirementsOnly || rrTest) {
             dlss.Shutdown(g); g.DestroyAllocator(); g.device.destroy(nullptr); g.instance.destroy(nullptr);
             return 0;
         }

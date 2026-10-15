@@ -14,7 +14,7 @@
 #include <windows.h>
 #endif
 
-int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD);
+int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest = false);
 
 namespace {
 
@@ -185,6 +185,7 @@ void TestDirectStorageSharedTextureLifecycle() {
 
 int main(int argc, char* argv[]) {
 	Config::Initialize();
+    if (argc > 1 && std::strcmp(argv[1], "--dlss-rr-vulkan") == 0) return RunDLSSVulkanSmoke(false, false, true);
     if (argc > 1 && (std::strcmp(argv[1], "--dlss-vulkan") == 0 || std::strcmp(argv[1], "--dlss-requirements") == 0 || std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0))
         return RunDLSSVulkanSmoke(std::strcmp(argv[1], "--dlss-requirements") == 0, std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0);
 

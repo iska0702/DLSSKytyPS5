@@ -599,11 +599,22 @@ set(STREAMLINE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../streamline-sdk-v2.14.1")
 # Runtime dependencies for every Streamline feature requested in SetupStreamline.
 set(STREAMLINE_RUNTIME_NAMES
     sl.interposer.dll sl.common.dll sl.dlss.dll nvngx_dlss.dll
-    sl.dlss_g.dll nvngx_dlssg.dll sl.reflex.dll NvLowLatencyVk.dll sl.pcl.dll sl.nis.dll)
+    sl.dlss_g.dll nvngx_dlssg.dll sl.reflex.dll NvLowLatencyVk.dll sl.pcl.dll sl.nis.dll sl.dlss_d.dll nvngx_dlssd.dll)
 set(STREAMLINE_DLLS "")
 foreach(name IN LISTS STREAMLINE_RUNTIME_NAMES)
     list(APPEND STREAMLINE_DLLS "${STREAMLINE_SDK_DIR}/bin/x64/${name}")
 endforeach()
+
+if(WIN32 AND EXISTS "${STREAMLINE_SDK_DIR}/include/sl_dlss_d.h")
+    add_executable(dlss_rr_input_tests EXCLUDE_FROM_ALL "${KYTY_TESTS_DIR}/DLSSRayInputTests.cpp"
+        "${KYTY_SOURCE_DIR}/graphics/presentation/dlss/dlssRayReconstruction.cpp")
+    target_include_directories(dlss_rr_input_tests PRIVATE "${KYTY_SOURCE_DIR}" "${STREAMLINE_SDK_DIR}/include")
+    target_link_libraries(dlss_rr_input_tests PRIVATE common Vulkan::Headers
+        "${STREAMLINE_SDK_DIR}/lib/x64/sl.interposer.lib")
+    if(BUILD_TESTING)
+        add_test(NAME dlss_rr_inputs COMMAND $<TARGET_FILE:dlss_rr_input_tests>)
+    endif()
+endif()
 
 if(EXISTS "${STREAMLINE_SDK_DIR}")
 	list(APPEND inc_headers "${STREAMLINE_SDK_DIR}/include")

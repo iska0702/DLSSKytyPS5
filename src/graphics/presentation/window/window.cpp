@@ -1015,7 +1015,12 @@ void WindowContext::UpdateTitle() {
 	}
 
 	const auto* device_name = graphic_ctx.GetPhysicalDeviceProperties().deviceName.data();
-	const auto  dlss_info   = Config::FSREnabled() ? FSRManager::Instance().GetOverlayInfo() : DLSSManager::Instance().GetOverlayInfo();
+	auto        dlss_info   = Config::FSREnabled() ? FSRManager::Instance().GetOverlayInfo() : DLSSManager::Instance().GetOverlayInfo();
+	if (Config::DLSSRREnabled() && !Config::FSREnabled()) {
+		const auto& rr = DLSSManager::Instance().RayReconstruction();
+		dlss_info += rr.IsActive() ? " | RR active" : rr.IsSupported()
+		    ? " | RR waiting for lighting inputs" : " | RR unavailable";
+	}
 	const auto  multiplier  = DLSSManager::Instance().GetEffectiveMultiplier();
 	std::string fps_text;
 	if (multiplier > 1 && current_fps > 0.0) {

@@ -465,6 +465,7 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
 	}
 	m_ui->comboBox_reflex_mode->setCurrentIndex(reflex_idx);
 
+	m_ui->checkBox_dlss_rr_enable->setChecked(info.dlss_rr_enabled);
 	m_ui->checkBox_dlss_diagnostics->setChecked(info.dlss_diagnostics);
 	m_ui->checkBox_dlss_enable->setChecked(info.dlss_enabled);
     m_fsr_checkbox->setChecked(info.fsr_enabled);
@@ -517,11 +518,13 @@ void ConfigurationEditDialog::UpdateDLSSUI() {
 		m_ui->checkBox_dlss_fg_enable->setChecked(false);
 		m_ui->comboBox_dlss_fg_mode->setEnabled(false);
 		m_ui->comboBox_reflex_mode->setEnabled(false);
-		m_ui->checkBox_dlss_diagnostics->setEnabled(false);
+		m_ui->checkBox_dlss_rr_enable->setEnabled(false);
+	m_ui->checkBox_dlss_diagnostics->setEnabled(false);
 	} else {
 		m_ui->checkBox_dlss_enable->setEnabled(true);
 		bool enabled = m_ui->checkBox_dlss_enable->isChecked();
 		m_ui->slider_dlss_sharpness->setEnabled(enabled);
+		m_ui->checkBox_dlss_rr_enable->setEnabled(enabled);
 		m_ui->checkBox_dlss_diagnostics->setEnabled(enabled);
 
 		// Frame Generation controls
@@ -756,6 +759,7 @@ static void UpdateInfo(Configuration& info, Ui::ConfigurationEditDialog& ui, boo
 	info.dlss_mode        = Configuration::DLSSMode::Quality;
 	info.dlss_sharpness   = ui.slider_dlss_sharpness->value() / 100.0f;
 	info.dlss_preset      = Configuration::DLSSPreset::Default;
+	info.dlss_rr_enabled = info.dlss_enabled && ui.checkBox_dlss_rr_enable->isChecked();
 	info.dlss_diagnostics = ui.checkBox_dlss_diagnostics->isChecked();
 	info.dlss_fg_enabled  = info.dlss_enabled && ui.checkBox_dlss_fg_enable->isChecked();
 	switch (ui.comboBox_dlss_fg_mode->currentIndex()) {

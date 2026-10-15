@@ -229,6 +229,7 @@ public:
 	DLSSMode   dlss_mode        = DLSSMode::Quality;
 	float      dlss_sharpness   = 0.35f;
 	DLSSPreset dlss_preset      = DLSSPreset::Default;
+	bool       dlss_rr_enabled = false;
 	bool       dlss_diagnostics = false;
 	bool       dlss_fg_enabled  = false;
 	DLSSGMode  dlss_fg_mode     = DLSSGMode::FG_2X;
@@ -273,6 +274,7 @@ public:
 		dlss_mode          = other.dlss_mode;
 		dlss_sharpness     = other.dlss_sharpness;
 		dlss_preset        = other.dlss_preset;
+		dlss_rr_enabled    = other.dlss_rr_enabled;
 		dlss_diagnostics   = other.dlss_diagnostics;
 		dlss_fg_enabled    = other.dlss_fg_enabled;
 		dlss_fg_mode       = other.dlss_fg_mode;
@@ -332,6 +334,7 @@ public:
 		KYTY_CFG_SET(dlss_mode);
 		s->setValue("dlss_sharpness", static_cast<double>(dlss_sharpness));
 		KYTY_CFG_SET(dlss_preset);
+		KYTY_CFG_SET(dlss_rr_enabled);
 		KYTY_CFG_SET(dlss_diagnostics);
 		KYTY_CFG_SET(dlss_fg_enabled);
 		KYTY_CFG_SET(dlss_fg_mode);
@@ -397,6 +400,7 @@ public:
 		if (EnumToText(dlss_preset).isEmpty()) {
 			dlss_preset = DLSSPreset::Default;
 		}
+		dlss_rr_enabled = s->value("dlss_rr_enabled", dlss_rr_enabled).toBool();
 		dlss_diagnostics = s->value("dlss_diagnostics", dlss_diagnostics).toBool();
 		dlss_fg_enabled  = s->value("dlss_fg_enabled", dlss_fg_enabled).toBool();
 		KYTY_CFG_GET(dlss_fg_mode);

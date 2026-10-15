@@ -207,6 +207,8 @@ bool DLSSDiagnosticsEnabled() {
 	return g_config->dlss_diagnostics;
 }
 
+bool DLSSRREnabled() { return g_config->dlss_rr_enabled; }
+
 bool DLSSFGEnabled() {
 	return g_config->dlss_fg_enabled;
 }

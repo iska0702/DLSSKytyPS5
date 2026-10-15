@@ -284,6 +284,7 @@ static QStringList CreateEmulatorArgs(const Configuration& info) {
         args << "--fsr-sharpness" << QString::number(info.dlss_sharpness, 'f', 2);
     } else if (info.dlss_enabled) {
 		args << "--dlss";
+		if (info.dlss_rr_enabled) args << "--dlss-rr";
 		args << "--dlss-mode" << EnumToText(info.dlss_mode);
 		args << "--dlss-sharpness" << QString::number(info.dlss_sharpness, 'f', 2);
 		args << "--dlss-preset" << EnumToText(info.dlss_preset);

@@ -431,6 +431,12 @@ To use your own sound, replace the emulator's assets/sounds/trophy-unlock.wav wi
            </property>
           </widget>
          </item>
+         <item row="9" column="0" colspan="2">
+          <widget class="QCheckBox" name="checkBox_dlss_rr_enable">
+           <property name="text"><string>Request NVIDIA Ray Reconstruction (lighting backend)</string></property>
+           <property name="toolTip"><string>Requires certified noisy HDR lighting, linear albedo, normals, roughness and reflection hit distance before game denoising. ASTRO BOT lighting capture is not integrated yet; ordinary DLSS remains active.</string></property>
+          </widget>
+         </item>
          <item row="8" column="0" colspan="2">
          <widget class="QCheckBox" name="checkBox_dlss_diagnostics">
           <property name="toolTip">

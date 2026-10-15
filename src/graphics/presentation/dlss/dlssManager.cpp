@@ -127,13 +127,18 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 		sl::kFeatureReflex,
 		sl::kFeaturePCL,
 		sl::kFeatureNIS,
+		sl::kFeatureDLSS_RR,
 	};
 	pref.featuresToLoad = features;
-	pref.numFeaturesToLoad = 5;
+	pref.numFeaturesToLoad = m_settings.rr_enabled ? 6 : 5;
 	pref.renderAPI = sl::RenderAPI::eVulkan;
-	pref.applicationId = 0x505335; // 'PS5' custom application ID
+	// Use NGX's documented custom-engine project identity, not an invented
+	// NVIDIA application ID. A nonempty engineVersion with an empty projectId
+	// makes the RR capability query fail with NGX invalid-parameter.
+	pref.applicationId = 0;
 	pref.engine = sl::EngineType::eCustom;
-	pref.engineVersion = "1.0.0";
+	pref.engineVersion = "1.5.0";
+	pref.projectId = "61ed2d18-0a15-5c38-ad37-cfb6fc2673c3";
 
 	sl::Result res = slInit(pref, sl::kSDKVersion);
 	if (res != sl::Result::eOk) {
@@ -334,6 +339,7 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
         Log::WriteToConsoleAndLog("[DLSS] Frame Generation unavailable: both DLSS-G and Reflex must be supported and loaded. Super Resolution remains available.\n");
     }
 
+	if (m_settings.rr_enabled) m_rr.Initialize(graphics.physical_device);
 	m_streamline_loaded = true;
 	m_available = true;
 	m_status = DLSSStatus::Available;
@@ -1205,6 +1211,7 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 			slDLSSGSetOptions(viewport, g_options);
 			slFreeResources(sl::kFeatureDLSS_G, viewport);
 		}
+		m_rr.Shutdown();
 		slFreeResources(sl::kFeatureDLSS, viewport);
 		slShutdown();
 		m_streamline_loaded = false;

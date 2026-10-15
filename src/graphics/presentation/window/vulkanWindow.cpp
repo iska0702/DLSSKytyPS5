@@ -1771,6 +1771,7 @@ void WindowContext::CreateVulkan() {
 	dlss_settings.sharpness   = Config::GetDLSSSharpness();
 	dlss_settings.preset      = static_cast<DLSSPreset>(Config::GetDLSSPreset());
 	dlss_settings.diagnostics = Config::DLSSDiagnosticsEnabled();
+	dlss_settings.rr_enabled  = Config::DLSSRREnabled() && !Config::FSREnabled();
 	dlss_settings.fg_enabled  = Config::DLSSFGEnabled() && !Config::FSREnabled();
 	dlss_settings.fg_mode     = static_cast<DLSSGMode>(Config::GetDLSSFGMode());
 	dlss_settings.reflex_mode = static_cast<ReflexMode>(Config::GetReflexMode());

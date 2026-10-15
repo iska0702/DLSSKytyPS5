@@ -54,6 +54,7 @@ struct DLSSSettings {
 	bool        diagnostics = false;
 
 	// Frame Generation & Multi-Frame Generation (DLSS-G)
+	bool        rr_enabled  = false;
 	bool        fg_enabled  = false;
 	DLSSGMode   fg_mode     = DLSSGMode::FG_2X;
 	ReflexMode  reflex_mode = ReflexMode::On;

@@ -5,6 +5,7 @@
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 #include "graphics/presentation/dlss/dlssConfig.h"
+#include "graphics/presentation/dlss/dlssRayReconstruction.h"
 #include "graphics/presentation/dlss/dlssCamera.h"
 
 #if defined(_WIN32)
@@ -50,6 +51,9 @@ public:
 	[[nodiscard]] DLSSStatus GetStatus() const noexcept { return m_status; }
 	[[nodiscard]] const std::string& GetStatusMessage() const noexcept { return m_status_message; }
 	[[nodiscard]] const DLSSSettings& GetSettings() const noexcept { return m_settings; }
+
+	DLSSRayReconstruction& RayReconstruction() { return m_rr; }
+	const DLSSRayReconstruction& RayReconstruction() const { return m_rr; }
 
 	void UpdateSettings(const DLSSSettings& settings);
 
@@ -128,6 +132,7 @@ private:
 	void CreateFallbackBuffers(GraphicContext& graphics, vk::Extent2D extent);
 	void DestroyFallbackBuffers(GraphicContext& graphics);
 
+	DLSSRayReconstruction   m_rr;
 	DLSSSettings            m_settings;
 	std::atomic<DLSSStatus> m_status { DLSSStatus::Disabled };
 	std::string             m_status_message;
