@@ -18,11 +18,16 @@ namespace {
 	std::abort();
 }
 
-std::vector<uint32_t> CollectUserData(const Program& program) {
+void CollectShaderData(const Program& program, BindingLayout& layout) {
 	std::array<bool, NumScalarRegs> registers {};
+	bool uses_dispatch_threads = false;
 	for (const auto* block: program.blocks) {
 		for (const auto& inst: *block) {
-			if (inst.GetOpcode() != ValueOpcode::GetUserData || !inst.HasUses()) {
+			if (!inst.HasUses()) {
+				continue;
+			}
+			uses_dispatch_threads |= inst.GetOpcode() == ValueOpcode::GetDispatchThreadExtent;
+			if (inst.GetOpcode() != ValueOpcode::GetUserData) {
 				continue;
 			}
 			if (inst.Arg(0).GetType() != Type::ScalarReg) {
@@ -35,13 +40,16 @@ std::vector<uint32_t> CollectUserData(const Program& program) {
 			registers[index] = true;
 		}
 	}
-	std::vector<uint32_t> result;
 	for (uint32_t index = 0; index < registers.size(); index++) {
 		if (registers[index]) {
-			result.push_back(index);
+			layout.user_data_registers.push_back(index);
 		}
 	}
-	return result;
+	layout.memory_offset_dword = static_cast<uint32_t>(layout.user_data_registers.size());
+	if (uses_dispatch_threads) {
+		layout.dispatch_thread_dword = layout.memory_offset_dword;
+		layout.memory_offset_dword += 3u;
+	}
 }
 
 void AddBinding(BindingLayout& layout, DescriptorBindingKind kind,
@@ -49,8 +57,10 @@ void AddBinding(BindingLayout& layout, DescriptorBindingKind kind,
 	layout.descriptors.push_back({kind, std::move(resources)});
 }
 
-bool UsesGds(const Program& program) {
-	bool uses_gds = false;
+} // namespace
+
+SharedMemoryResources CollectSharedMemory(const Program& program) {
+	SharedMemoryResources shared;
 	for (const auto* block: program.blocks) {
 		for (const auto& inst: *block) {
 			if (SharedAccessOf(inst.GetOpcode()) == SharedAccess::None) {
@@ -64,13 +74,68 @@ bool UsesGds(const Program& program) {
 			if (kind != ResourceKind::Lds && kind != ResourceKind::Gds) {
 				BindingFail("typed shader contains invalid shared-memory metadata");
 			}
-			uses_gds |= kind == ResourceKind::Gds;
+			shared.gds |= kind == ResourceKind::Gds;
+			shared.lds |= kind == ResourceKind::Lds;
 		}
 	}
-	return uses_gds;
+	return shared;
 }
 
-} // namespace
+std::vector<uint32_t> UniformBufferResources(const Program& program) {
+	std::vector<uint32_t> result;
+	if (!GetCodegenOptions().uniform_buffers ||
+	    !GetHostUniformBufferRobust() ||
+	    program.info.buffers.empty()) {
+		return result;
+	}
+	const auto& buffers = program.info.buffers;
+	// 0: unused, 1: only in-range immediate constant reads, 2: anything else.
+	std::vector<uint8_t> use(buffers.size(), 0);
+	for (const auto* block: program.blocks) {
+		for (const auto& inst: *block) {
+			const auto op = inst.GetOpcode();
+			if (BufferAccessOf(op) == BufferAccess::None) {
+				continue;
+			}
+			const auto index = inst.Flags<MemoryFlags>().index;
+			if (index >= program.memory_info.size()) {
+				return {};
+			}
+			const auto& memory = program.memory_info[index];
+			if (memory.planning_only) {
+				continue;
+			}
+			if (memory.kind != ResourceKind::Buffer && memory.kind != ResourceKind::ScalarBuffer) {
+				if (memory.kind == ResourceKind::IndirectBuffer && memory.resource < use.size()) {
+					use[memory.resource] = 2;
+				}
+				continue;
+			}
+			if (memory.resource >= use.size()) {
+				return {};
+			}
+			bool constant = false;
+			if (op == ValueOpcode::ReadConstBuffer && inst.NumArgs() >= 2u) {
+				const auto offset = inst.Arg(1).Resolve();
+				// EmitReadConstBuffer: dword (offset + mem.offset) / 4, plus the base adjustment.
+				constant = offset.IsImmediate() && offset.GetType() == Type::U32 &&
+				           static_cast<uint64_t>(offset.U32()) + memory.offset + sizeof(uint32_t) <=
+				               UniformBufferBytes - UniformBufferBaseSlack;
+			}
+			use[memory.resource] = std::max<uint8_t>(use[memory.resource], constant ? 1u : 2u);
+		}
+	}
+	for (uint32_t i = 0; i < buffers.size(); i++) {
+		const auto& buffer = buffers[i];
+		if (use[i] == 1u && !buffer.written && !buffer.atomic && !buffer.formatted &&
+		    buffer.image_alias == BufferResource::NoImageAlias &&
+		    buffer.indirect_root == BufferResource::NoIndirectBuffer &&
+		    buffer.indirect_resources.empty()) {
+			result.push_back(i);
+		}
+	}
+	return result;
+}
 
 bool UsesBvhNodeCount(const Program& program) {
 	const auto& options = GetCodegenOptions();
@@ -112,27 +177,34 @@ bool UsesMipStats(const Program& program) {
 	return false;
 }
 
-void AllocateBindings(Program& program, uint32_t push_data_start_dword) {
+void AllocateBindings(Program& program, uint32_t push_data_start_dword, bool lds_storage) {
 	if (!program.shader_info_complete || program.binding_layout_complete) {
 		EXIT("shader binding layout failed: %s", !program.shader_info_complete
 		                                             ? "shader info is not ready"
 		                                             : "binding layout already allocated");
 	}
 	BindingLayout next;
-	next.user_data_registers = CollectUserData(program);
-	next.memory_offset_dword = static_cast<uint32_t>(next.user_data_registers.size());
+	CollectShaderData(program, next);
 	next.memory_offset_count = static_cast<uint32_t>(program.info.buffers.size());
 	const bool mip_stats     = UsesMipStats(program);
 	next.mip_stats_count     = mip_stats ? static_cast<uint32_t>(program.info.images.size()) : 0u;
 	next.push_data_start_dword =
 	    PushData::StartFor(push_data_start_dword, next.ShaderDataDwords());
 
+	auto uniform_buffers = UniformBufferResources(program);
 	if (!program.info.buffers.empty()) {
-		std::vector<uint32_t> resources(program.info.buffers.size());
-		for (uint32_t i = 0; i < resources.size(); i++) {
-			resources[i] = i;
+		std::vector<uint32_t> resources;
+		for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
+			if (!std::ranges::binary_search(uniform_buffers, i)) {
+				resources.push_back(i);
+			}
 		}
-		AddBinding(next, DescriptorBindingKind::Buffers, std::move(resources));
+		if (!resources.empty()) {
+			AddBinding(next, DescriptorBindingKind::Buffers, std::move(resources));
+		}
+	}
+	if (!uniform_buffers.empty()) {
+		AddBinding(next, DescriptorBindingKind::UniformBuffers, std::move(uniform_buffers));
 	}
 
 	std::array<std::vector<uint32_t>, ImageBindingCount> image_groups;
@@ -169,8 +241,12 @@ void AllocateBindings(Program& program, uint32_t push_data_start_dword) {
 		AddBinding(next, DescriptorBindingKind::Samplers, std::move(resources));
 	}
 	// KYTY_LOOP_GUARD and the BVH node count report through GDS, so those programs bind GDS.
-	if (UsesGds(program) || LoopGuardApplies(program.shader_hash) || UsesBvhNodeCount(program)) {
+	const auto shared = CollectSharedMemory(program);
+	if (shared.gds || LoopGuardApplies(program.shader_hash) || UsesBvhNodeCount(program)) {
 		AddBinding(next, DescriptorBindingKind::Gds);
+	}
+	if (shared.lds && lds_storage) {
+		AddBinding(next, DescriptorBindingKind::SharedMemory);
 	}
 	if (program.info.uses_dma) {
 		AddBinding(next, DescriptorBindingKind::BdaPagetable);

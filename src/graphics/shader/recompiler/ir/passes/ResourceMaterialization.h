@@ -49,6 +49,12 @@ bool MaterializeResources(const ResourcePlan& program, const SrtRuntime& runtime
 bool MaterializeResources(const ResourcePlan& program, const SrtRuntime& runtime,
                           ResourceSnapshot& snapshot, ResourceSpecialization& specialization);
 
+// KYTY_SPEC_UNMAPPED_NULL: whether a V# base is inside a guest mapping (the binding's test; the V#
+// is nulled when not). Null: off. Set once by the renderer before draws.
+void SetUnmappedBufferProbe(SrtMappedRange probe);
+// V#s specialized as null by that rule so far.
+[[nodiscard]] uint64_t UnmappedBufferNulls();
+
 // Applies an already-derived specialization to native IR before layout and emission.
 void ApplyResourceSpecialization(Program& program, const ResourceSpecialization& specialization);
 

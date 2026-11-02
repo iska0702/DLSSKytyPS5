@@ -279,6 +279,8 @@ void BlitHelper::ReinterpretColorAsMsDepth(Image& source, Image& destination) {
 	command.setScissor(0, 1, &scissor);
 	command.draw(3, 1, 0, 0);
 	command.endRendering();
+	// The helper pipeline has static state that invalidates the guest draw's dynamic state.
+	m_scheduler.GetDynamicState().Invalidate();
 }
 
 namespace {
@@ -341,11 +343,12 @@ void BlitHelper::CopyDepthToColor32(Image& source, Image& destination) {
 	source_view_info.usage       = vk::ImageUsageFlagBits::eSampled;
 	const auto source_view       = source.FindView(source_view_info);
 
-	auto& command_buffer = m_scheduler.Current();
-	auto  command        = command_buffer.Handle();
+	auto&      command_buffer = m_scheduler.Current();
+	const auto command        = command_buffer.HelperSink();
 	source.Transit(vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eShaderRead, {},
-	               command);
-	destination.Transit(vk::ImageLayout::eGeneral, vk::AccessFlagBits2::eShaderWrite, {}, command);
+	               command.Identity());
+	destination.Transit(vk::ImageLayout::eGeneral, vk::AccessFlagBits2::eShaderWrite, {},
+	                    command.Identity());
 	command_buffer.BindPipeline(vk::PipelineBindPoint::eCompute, m_d2c_pipeline);
 	for (uint32_t level = 0; level < levels; level++) {
 		ImageViewInfo destination_view_info {};

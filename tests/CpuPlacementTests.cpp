@@ -8,7 +8,12 @@
 //    meets them is narrowed by the CPU sets; process default CPU sets replaced by another process
 //    (Process Lasso's CPU-set rule) are applied again (KYTY_CPU_RESERVE_REASSERT).
 //    KYTY_CPU_SETS: its list parser (ParseLogicalMask).
-// 3. --bench [seconds] [reps]: KYTY_CPU_RESERVE=off against cp, in child processes on logical
+// 3. KYTY_VCACHE_PLACEMENT: DetectVCache, DecideVCachePlacement and ComputeVCacheLayout on fake
+//    topologies (7950X3D both ways round, 7900X3D, 7800X3D/9800X3D, 7950X, Intel hybrid, 6-core
+//    12-thread, external CPU sets). --vcache sets|affinity|pending (Windows, a dual-CCD X3D only,
+//    otherwise skipped): the placement applied live, then dropped when another process's default
+//    CPU sets or affinity mask appear; pending: auto waits for its settle time first.
+// 4. --bench [seconds] [reps]: KYTY_CPU_RESERVE=off against cp, in child processes on logical
 //    processors 0-15 at HIGH priority (Process Lasso's rule for the game). A CP-like thread runs
 //    fixed work chunks after ~100 us blocking waits, next to bursty guest-like threads and a yield
 //    poller; it reports the CP's chunk time and wake latency and the guests' throughput.
@@ -43,6 +48,8 @@ namespace {
 using Common::CpuLayout;
 using Common::CpuReserveMode;
 using Common::CpuSetInfo;
+using Common::L3Cache;
+using Common::VCacheMode;
 using Profiler::FrameEvent;
 
 void Check(bool value, const char* text) {
@@ -178,6 +185,184 @@ void TestLayouts() {
 		Check(!ComputeCpuLayout(other_group, CpuReserveMode::Cp, -1).reserved, "group 0 only");
 	}
 	std::puts("CpuPlacementTests: layouts ok");
+}
+
+constexpr uint64_t MiB = 1024ull * 1024ull;
+
+L3Cache L3(uint64_t mask, uint64_t mib) {
+	return {0, mask, mib * MiB};
+}
+
+bool Contains(const std::string& text, const char* part) {
+	return text.find(part) != std::string::npos;
+}
+
+// A CPU set table of `logical` processors with SMT pairs, one cache index per `per_cache`.
+std::vector<CpuSetInfo> GenericTable(uint32_t logical, uint32_t per_cache) {
+	std::vector<CpuSetInfo> sets;
+	for (uint32_t lp = 0; lp < logical; lp++) {
+		CpuSetInfo set;
+		set.id      = 256 + lp;
+		set.logical = static_cast<uint8_t>(lp);
+		set.core    = static_cast<uint8_t>(lp & ~1u);
+		set.cache   = static_cast<uint8_t>(lp / per_cache * per_cache);
+		set.allowed = true;
+		sets.push_back(set);
+	}
+	return sets;
+}
+
+void TestVCache() {
+	using Common::ComputeCpuLayout;
+	using Common::ComputeVCacheLayout;
+	using Common::DecideVCachePlacement;
+	using Common::DetectVCache;
+	const auto full = MachineTable(0xFFFFFFFF);
+	{
+		// 7950X3D as on this machine: CCD0 (0-15) 96 MiB, CCD1 (16-31) 32 MiB.
+		const auto topology = DetectVCache({L3(0xFFFF, 96), L3(0xFFFF0000, 32)});
+		Check(topology.dual && topology.groups == 2 && topology.vcache_mask == 0xFFFF &&
+		          topology.other_mask == 0xFFFF0000 && topology.vcache_bytes == 96 * MiB &&
+		          topology.other_bytes == 32 * MiB,
+		      "7950X3D: CCD0 is the V-cache CCD");
+		Check(Contains(topology.description, "96 MiB on logical 0-15") &&
+		          Contains(topology.description, "32 MiB on logical 16-31"),
+		      "7950X3D: description");
+		const auto decision = DecideVCachePlacement(VCacheMode::Auto, topology, false, false);
+		Check(decision.engage, "7950X3D, no external rule: applies");
+		const auto cp = ComputeVCacheLayout(full, CpuReserveMode::Cp, -1, topology);
+		Check(cp.vcache && cp.reserved && cp.cp_mask == 0xC && cp.general_mask == (0xFFFFu & ~0xCu) &&
+		          cp.cold_mask == 0xFFFF0000ull && cp.cold_ids.size() == 16 &&
+		          cp.general_ids.size() == 14,
+		      "7950X3D cp: CP on 2-3, hot 0-1,4-15, cold 16-31");
+		const auto both = ComputeVCacheLayout(full, CpuReserveMode::CpRecorder, -1, topology);
+		Check(both.vcache && both.cp_mask == 0xC && both.recorder_mask == 0xC00 &&
+		          (both.general_mask & 0xFFFF0000ull) == 0 && Count(both.general_mask) == 12,
+		      "7950X3D cp+recorder: both reserved cores on the V-cache CCD");
+		const auto off = ComputeVCacheLayout(full, CpuReserveMode::Off, -1, topology);
+		Check(off.vcache && !off.reserved && off.cp_ids.empty() && off.general_mask == 0xFFFF &&
+		          off.cold_mask == 0xFFFF0000ull,
+		      "7950X3D without a reservation: hot 0-15, cold 16-31");
+		// Process Lasso's affinity (0-15): nothing is left for the cold threads.
+		const auto lasso = ComputeVCacheLayout(MachineTable(0xFFFF), CpuReserveMode::Cp, -1, topology);
+		Check(!lasso.vcache && Contains(lasso.description, "outside the V-cache CCD"),
+		      "only the V-cache CCD allowed: not applied");
+		// Too few hot processors.
+		const auto few = ComputeVCacheLayout(MachineTable(0xF000000F), CpuReserveMode::Off, -1, topology);
+		Check(!few.vcache && Contains(few.description, "only 4"), "4 hot processors: not applied");
+		// KYTY_CPU_RESERVE_CORE on the other CCD: the reservation does not fit.
+		const auto forced = ComputeVCacheLayout(full, CpuReserveMode::Cp, 20, topology);
+		Check(!forced.vcache && Contains(forced.description, "does not fit"),
+		      "forced CP core outside the V-cache CCD: not applied");
+		// Without the placement the legacy tie (16 against 16) goes to the V-cache CCD, here also the
+		// lower index: unchanged.
+		Check(ComputeCpuLayout(full, CpuReserveMode::Cp, -1, Common::kMinGeneralProcessors,
+		                       topology.vcache_mask)
+		              .cp_mask == 0xC,
+		      "7950X3D legacy tie: CCD0");
+	}
+	{
+		// The same chip the other way round: CCD1 (16-31) has the V-cache.
+		const auto topology = DetectVCache({L3(0xFFFF, 32), L3(0xFFFF0000, 96)});
+		Check(topology.dual && topology.vcache_mask == 0xFFFF0000ull && topology.other_mask == 0xFFFF,
+		      "reversed 7950X3D: CCD1 is the V-cache CCD (by size, not index)");
+		const auto cp = ComputeVCacheLayout(full, CpuReserveMode::Cp, -1, topology);
+		// Cores 18 and 22 tie at preference 14: the lower index.
+		Check(cp.vcache && cp.cp_mask == 0xC0000ull &&
+		          cp.general_mask == (0xFFFF0000ull & ~0xC0000ull) && cp.cold_mask == 0xFFFF,
+		      "reversed 7950X3D: CP on 18-19, hot 16-31, cold 0-15");
+		const auto tie = ComputeCpuLayout(full, CpuReserveMode::Cp, -1, Common::kMinGeneralProcessors,
+		                                  topology.vcache_mask);
+		Check(tie.reserved && tie.cp_mask == 0xC0000ull,
+		      "reversed 7950X3D legacy tie: the V-cache CCD, not the lower index");
+		Check(ComputeCpuLayout(full, CpuReserveMode::Cp, -1).cp_mask == 0xC,
+		      "no preference: the lower index as before");
+		// Most allowed processors still decide before the tie-break.
+		Check(ComputeCpuLayout(MachineTable(0xFFFF), CpuReserveMode::Cp, -1,
+		                       Common::kMinGeneralProcessors, topology.vcache_mask)
+		              .cp_mask == 0xC,
+		      "reversed, mask 0-15: the CP stays in the allowed cache");
+	}
+	{
+		// 7900X3D: 6 cores (12 logical) per CCD, 96 + 32 MiB.
+		const auto topology = DetectVCache({L3(0xFFF, 96), L3(0xFFF000, 32)});
+		const auto layout =
+		    ComputeVCacheLayout(GenericTable(24, 12), CpuReserveMode::Cp, -1, topology);
+		Check(topology.dual && layout.vcache && (layout.cp_mask & ~0xFFFull) == 0 &&
+		          Count(layout.cp_mask) == 2 && Count(layout.general_mask) == 10 &&
+		          layout.cold_mask == 0xFFF000ull,
+		      "7900X3D: CP and 10 hot processors on CCD0, cold on CCD1");
+	}
+	{
+		// 7800X3D / 9800X3D: one CCD, one 96 MiB L3.
+		const auto topology = DetectVCache({L3(0xFFFF, 96)});
+		Check(!topology.dual && topology.groups == 1 && Contains(topology.description, "one L3"),
+		      "7800X3D: one L3");
+		const auto decision = DecideVCachePlacement(VCacheMode::Auto, topology, false, false);
+		Check(!decision.engage && Contains(decision.reason, "not a dual-CCD X3D"),
+		      "7800X3D: no change");
+		Check(!DecideVCachePlacement(VCacheMode::On, topology, false, false).engage,
+		      "7800X3D, KYTY_VCACHE_PLACEMENT=1: still nothing to do");
+		Check(!ComputeVCacheLayout(MachineTable(0xFFFF), CpuReserveMode::Cp, -1, topology).vcache,
+		      "7800X3D: no layout");
+	}
+	{
+		// 7950X: two CCDs, 32 MiB each.
+		const auto topology = DetectVCache({L3(0xFFFF, 32), L3(0xFFFF0000, 32)});
+		Check(!topology.dual && topology.groups == 2 && Contains(topology.description, "similar size"),
+		      "7950X: not X3D");
+		Check(!DecideVCachePlacement(VCacheMode::Auto, topology, false, false).engage,
+		      "7950X: no change");
+		// Close sizes do not count either (40 against 32 MiB).
+		Check(!DetectVCache({L3(0xFFFF, 40), L3(0xFFFF0000, 32)}).dual, "40 against 32 MiB: similar");
+		Check(DetectVCache({L3(0xFFFF, 48), L3(0xFFFF0000, 32)}).dual, "48 against 32 MiB: 1.5 times");
+	}
+	{
+		// Intel hybrid (8 P-cores with SMT, 12 E-cores): one 33 MiB L3 for all 28.
+		const auto topology = DetectVCache({L3(0xFFFFFFF, 33)});
+		Check(!topology.dual && !DecideVCachePlacement(VCacheMode::Auto, topology, false, false).engage,
+		      "Intel hybrid: no change");
+	}
+	{
+		// 6 cores, 12 threads, one 32 MiB L3.
+		const auto topology = DetectVCache({L3(0xFFF, 32)});
+		Check(!topology.dual && !DecideVCachePlacement(VCacheMode::Auto, topology, false, false).engage,
+		      "6-core 12-thread: no change");
+	}
+	{
+		// Other shapes: duplicates merge, other groups and empty masks are ignored, three groups.
+		Check(!DetectVCache({}).dual && Contains(DetectVCache({}).description, "no L3"), "no L3");
+		Check(!DetectVCache({L3(0xFFFF, 96), L3(0xFFFF, 96)}).dual, "one L3 reported twice");
+		Check(!DetectVCache({L3(0xFFFF, 96), {1, 0xFFFF, 32 * MiB}, L3(0, 32)}).dual,
+		      "group 1 and empty masks ignored");
+		const auto three = DetectVCache({L3(0xFF, 96), L3(0xFF00, 32), L3(0xFF0000, 32)});
+		Check(three.dual && three.vcache_mask == 0xFF && three.other_mask == 0xFFFF00,
+		      "three L3s: the largest against the rest");
+		Check(!DetectVCache({L3(0xFF, 96), L3(0xFF00, 96), L3(0xFF0000, 32)}).dual,
+		      "two equal largest L3s: not one V-cache CCD");
+	}
+	{
+		// External rules and the switch.
+		const auto topology = DetectVCache({L3(0xFFFF, 96), L3(0xFFFF0000, 32)});
+		const auto external = DecideVCachePlacement(VCacheMode::Auto, topology, true, false);
+		Check(!external.engage && Contains(external.reason, "external CPU-set/affinity rule"),
+		      "external CPU sets present: no change");
+		Check(!DecideVCachePlacement(VCacheMode::Auto, topology, false, true).engage,
+		      "KYTY_CPU_SETS: no change");
+		Check(DecideVCachePlacement(VCacheMode::On, topology, true, true).engage,
+		      "KYTY_VCACHE_PLACEMENT=1: also with an external rule");
+		Check(!DecideVCachePlacement(VCacheMode::Off, topology, false, false).engage,
+		      "KYTY_VCACHE_PLACEMENT=0: off");
+		bool valid = false;
+		Check(Common::ParseVCacheMode(nullptr, &valid) == VCacheMode::Auto && valid, "vcache unset");
+		Check(Common::ParseVCacheMode("auto", &valid) == VCacheMode::Auto && valid, "vcache auto");
+		Check(Common::ParseVCacheMode("0", &valid) == VCacheMode::Off && valid, "vcache 0");
+		Check(Common::ParseVCacheMode("off", &valid) == VCacheMode::Off && valid, "vcache off");
+		Check(Common::ParseVCacheMode("1", &valid) == VCacheMode::On && valid, "vcache 1");
+		Check(Common::ParseVCacheMode("on", &valid) == VCacheMode::On && valid, "vcache on");
+		Check(Common::ParseVCacheMode("2", &valid) == VCacheMode::Auto && !valid, "vcache unknown");
+	}
+	std::puts("CpuPlacementTests: V-cache topologies ok");
 }
 
 void TestAffinityAndModes() {
@@ -495,6 +680,148 @@ void TestLive(CpuReserveMode mode) {
 		Check(Common::PlacementReasserts() == reasserts + 1, "an unchanged state was re-asserted");
 	}
 	std::puts("CpuPlacementTests: live placement ok");
+}
+
+// The selected CPU sets of a thread (empty: none).
+std::vector<ULONG> ThreadSets(HANDLE thread) {
+	std::vector<ULONG> ids(256);
+	ULONG              count = 0;
+	if (GetThreadSelectedCpuSets(thread, ids.data(), static_cast<ULONG>(ids.size()), &count) == 0) {
+		count = 0;
+	}
+	ids.resize(count);
+	return ids;
+}
+
+// --vcache sets|affinity|pending, with KYTY_CPU_RESERVE=cp and KYTY_VCACHE_PLACEMENT=auto.
+int TestVCacheLive(const char* scenario) {
+	const bool pending = std::strcmp(scenario, "pending") == 0;
+	SetEnv("KYTY_CPU_RESERVE", "cp");
+	SetEnv("KYTY_CPU_RESERVE_CORE", "");
+	SetEnv("KYTY_CPU_RESERVE_REASSERT", "");
+	SetEnv("KYTY_CPU_SETS", "");
+	SetEnv("KYTY_VCACHE_PLACEMENT", "auto");
+	SetEnv("KYTY_VCACHE_SETTLE_MS", pending ? "600000" : "0");
+	const auto original = ProcessMask();
+	Common::InitCpuPlacement();
+	const auto layout = Common::CurrentCpuLayout();
+	std::printf("CpuPlacementTests: V-cache %s, process mask 0x%llx: %s\n", scenario,
+	            static_cast<unsigned long long>(original), layout.description.c_str());
+	if (pending) {
+		Check(!layout.vcache, "auto applied before its settle time");
+		std::puts("CpuPlacementTests: V-cache pending ok");
+		return 0;
+	}
+	if (!layout.vcache) {
+		std::puts("CpuPlacementTests: V-cache live skipped (not a dual-CCD X3D without an external "
+		          "rule here)");
+		return 0;
+	}
+	Check(layout.reserved && layout.cold_mask != 0 && (layout.cp_mask & layout.cold_mask) == 0 &&
+	          (layout.general_mask & layout.cold_mask) == 0,
+	      "V-cache layout: CP and hot processors off the cold CCD");
+
+	// Hot load, the CP and a cold thread at once.
+	std::atomic<int> phase {0};
+	HANDLE           cold_handle = nullptr;
+	uint64_t         cold_seen   = 0;
+	uint64_t         cold_after  = 0;
+	std::thread      cold([&] {
+        Common::PlaceCurrentThreadCold();
+        Common::PlaceCurrentThreadCold(); // idempotent
+        (void)DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+		                           &cold_handle, 0, FALSE, DUPLICATE_SAME_ACCESS);
+        cold_seen = RunAndRecord(400);
+        phase     = 1;
+        while (phase.load() != 2) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        cold_after = RunAndRecord(300);
+        phase      = 3;
+    });
+	uint64_t load_seen = 0;
+	uint64_t cp_seen   = 0;
+	{
+		Load        load(load_seen);
+		std::thread cp([&] {
+			Common::PlaceCurrentThread(Common::ThreadRole::Cp);
+			cp_seen = RunAndRecord(400);
+		});
+		cp.join();
+		while (phase.load() != 1) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+	}
+	std::printf("  ran on: CP 0x%llx, hot load 0x%llx, cold thread 0x%llx\n",
+	            static_cast<unsigned long long>(cp_seen),
+	            static_cast<unsigned long long>(load_seen),
+	            static_cast<unsigned long long>(cold_seen));
+	Check(cp_seen != 0 && (cp_seen & ~layout.cp_mask) == 0, "the CP ran off its core");
+	Check(load_seen != 0 && (load_seen & ~layout.general_mask) == 0,
+	      "a hot thread ran outside the V-cache CCD's general processors");
+	Check(cold_seen != 0 && (cold_seen & ~layout.cold_mask) == 0,
+	      "the cold thread ran outside the other CCD");
+
+	// An external rule appears. sets: another process sets every processor as the process default
+	// CPU sets (Process Lasso's CPU-set rule); affinity: the process mask narrows to the V-cache CCD.
+	std::vector<ULONG> every;
+	for (const auto& ids: {layout.cp_ids, layout.general_ids, layout.cold_ids}) {
+		every.insert(every.end(), ids.begin(), ids.end());
+	}
+	std::sort(every.begin(), every.end());
+	const bool sets = std::strcmp(scenario, "sets") == 0;
+	if (sets) {
+		Check(SetProcessDefaultCpuSets(GetCurrentProcess(), every.data(),
+		                               static_cast<ULONG>(every.size())) != 0,
+		      "SetProcessDefaultCpuSets (the other process)");
+	} else {
+		Check(SetProcessAffinityMask(GetCurrentProcess(),
+		                             static_cast<DWORD_PTR>(layout.cp_mask | layout.general_mask)) != 0,
+		      "SetProcessAffinityMask");
+	}
+	Common::MaintainCpuPlacement();
+	const auto after = Common::CurrentCpuLayout();
+	std::printf("  after the external rule (%s): %s\n", scenario, after.description.c_str());
+	Check(!after.vcache && after.cold_mask == 0, "the V-cache placement was not dropped");
+	Check(ThreadSets(cold_handle).empty(), "the cold thread kept its CPU sets");
+	std::vector<ULONG> current(256);
+	ULONG              count = 0;
+	Check(GetProcessDefaultCpuSets(GetCurrentProcess(), current.data(),
+	                               static_cast<ULONG>(current.size()), &count) != 0,
+	      "GetProcessDefaultCpuSets");
+	current.resize(count);
+	std::sort(current.begin(), current.end());
+	if (sets) {
+		// As without the placement (no KYTY_CPU_RESERVE_REASSERT): the other process's sets stay and
+		// the CP keeps its core.
+		Check(current == every, "the other process's default CPU sets were replaced");
+		Check(after.reserved && after.cp_mask == layout.cp_mask, "the CP lost its core");
+	} else {
+		// As without the placement: the KYTY_CPU_RESERVE layout within the new mask.
+		std::vector<ULONG> general(after.general_ids.begin(), after.general_ids.end());
+		std::sort(general.begin(), general.end());
+		Check(after.reserved && ((after.cp_mask | after.general_mask) & ~(layout.cp_mask | layout.general_mask)) == 0 &&
+		          current == general,
+		      "the layout did not follow the new process mask");
+	}
+	phase = 2;
+	while (phase.load() != 3) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	cold.join();
+	CloseHandle(cold_handle);
+	Common::MaintainCpuPlacement();
+	Check(!Common::CurrentCpuLayout().vcache, "the V-cache placement came back after an external rule");
+	if (!sets) {
+		(void)SetProcessAffinityMask(GetCurrentProcess(), static_cast<DWORD_PTR>(original));
+		Common::MaintainCpuPlacement();
+		Check(!Common::CurrentCpuLayout().vcache,
+		      "the V-cache placement came back after the mask was restored");
+	}
+	std::printf("  cold thread after the rule ran on 0x%llx\n",
+	            static_cast<unsigned long long>(cold_after));
+	std::puts("CpuPlacementTests: V-cache live ok");
+	return 0;
 }
 
 // ---- --bench ----
@@ -868,6 +1195,11 @@ int main(int argc, char** argv) {
 		const uint32_t guests  = argc > 3 ? static_cast<uint32_t>(std::atoi(argv[3])) : 10u;
 		return BenchChild(seconds, guests);
 	}
+	if (argc >= 3 && std::strcmp(argv[1], "--vcache") == 0) {
+		Profiler::Detail::g_event_sink.store(Profiler::Detail::CounterSink::Thread);
+		TestVCache();
+		return TestVCacheLive(argv[2]);
+	}
 	if (argc >= 2 && std::strcmp(argv[1], "--bench") == 0) {
 		const double   seconds = argc > 2 ? std::atof(argv[2]) : 4.0;
 		const uint32_t reps    = argc > 3 ? static_cast<uint32_t>(std::atoi(argv[3])) : 4u;
@@ -886,9 +1218,11 @@ int main(int argc, char** argv) {
 	SetEnv("KYTY_CPU_RESERVE_CORE", "");
 	SetEnv("KYTY_CPU_RESERVE_REASSERT", "1");
 	SetEnv("KYTY_CPU_SETS", "");
+	SetEnv("KYTY_VCACHE_PLACEMENT", "0"); // the KYTY_CPU_RESERVE behaviour alone (--vcache: with it)
 	Profiler::Detail::g_event_sink.store(Profiler::Detail::CounterSink::Thread);
 
 	TestLayouts();
+	TestVCache();
 	TestAffinityAndModes();
 	Check(Common::GetCpuReserveMode() == mode, "KYTY_CPU_RESERVE");
 #if defined(_WIN32)

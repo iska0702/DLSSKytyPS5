@@ -1,5 +1,6 @@
 #include "common/hangWatchdog.h"
 
+#include "common/cpuPlacement.h"
 #include "common/hostException.h"
 #include "common/liveSwitch.h"
 #include "kytyGitVersion.h"
@@ -497,6 +498,7 @@ void StartMonitor(std::string_view trace_directory) {
 	const auto  timeout =
 	    value ? std::clamp<uint64_t>(std::strtoull(value, nullptr, 10), 1000, 600000) : 5000;
 	g_watchdog = std::jthread([timeout](std::stop_token stop) {
+		Common::PlaceCurrentThreadCold();
 		try {
 			StallDetector    detector;
 			std::unique_lock lock(g_sleep_mutex);

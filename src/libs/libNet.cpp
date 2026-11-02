@@ -18,6 +18,9 @@
 
 namespace Libs {
 
+namespace LibNpEntitlementAccess {
+void InitNet_1_NpEntitlementAccess(Loader::SymbolDatabase* s);
+}
 namespace LibNpTrophy2 {
 void InitNet_1_NpTrophy2(Loader::SymbolDatabase* s);
 }
@@ -87,6 +90,10 @@ int KYTY_SYSV_ABI NetAccept(int s, void* addr, uint32_t* addrlen) {
 
 int KYTY_SYSV_ABI NetBind(int s, const void* addr, uint32_t addrlen) {
 	return FinishSocketCall(Net::Bind(s, addr, addrlen));
+}
+
+int KYTY_SYSV_ABI NetConnect(int s, const void* addr, uint32_t addrlen) {
+	return FinishSocketCall(Net::Connect(s, addr, addrlen));
 }
 
 int KYTY_SYSV_ABI NetListen(int s, int backlog) {
@@ -170,19 +177,35 @@ int KYTY_SYSV_ABI NetSocketClose(int s) {
 	return FinishNetCall(Net::SocketClose(s));
 }
 
+int KYTY_SYSV_ABI NetGetsockopt(int s, int level, int optname, void* optval, uint32_t* optlen) {
+	return FinishSocketCall(Net::Getsockopt(s, level, optname, optval, optlen));
+}
+
 int KYTY_SYSV_ABI NetSetsockopt(int s, int level, int optname, const void* optval,
                                 uint32_t optlen) {
 	return FinishSocketCall(Net::Setsockopt(s, level, optname, optval, optlen));
 }
 
-int KYTY_SYSV_ABI NetSend(int s, const void* buf, size_t len, int flags) {
+int KYTY_SYSV_ABI NetSendto(int s, const void* buf, size_t len, int flags, const void* addr,
+                         uint32_t addrlen) {
 	const auto size = std::min<size_t>(len, std::numeric_limits<int>::max());
-	return FinishSocketCall(static_cast<int>(Net::Send(s, buf, size, flags | 0x20000)));
+	return FinishSocketCall(
+	    static_cast<int>(Net::Sendto(s, buf, size, flags | 0x20000, addr, addrlen)));
+}
+
+int KYTY_SYSV_ABI NetSend(int s, const void* buf, size_t len, int flags) {
+	return NetSendto(s, buf, len, flags, nullptr, 0);
 }
 
 int KYTY_SYSV_ABI NetRecv(int s, void* buf, size_t len, int flags) {
 	const auto size = std::min<size_t>(len, std::numeric_limits<int>::max());
 	return FinishSocketCall(static_cast<int>(Net::Recv(s, buf, size, flags)));
+}
+
+int KYTY_SYSV_ABI NetRecvfrom(int s, void* buf, size_t len, int flags, void* addr,
+                               uint32_t* addrlen) {
+	const auto size = std::min<size_t>(len, std::numeric_limits<int>::max());
+	return FinishSocketCall(static_cast<int>(Net::Recvfrom(s, buf, size, flags, addr, addrlen)));
 }
 
 uint32_t KYTY_SYSV_ABI NetHtonl(uint32_t host32) {
@@ -209,6 +232,7 @@ LIB_DEFINE(InitNet_1_Net) {
 	LIB_FUNC("HQOwnfMGipQ", LibNet::GetNetErrorAddr);
 	LIB_FUNC("PIWqhn9oSxc", LibNet::NetAccept);
 	LIB_FUNC("bErx49PgxyY", LibNet::NetBind);
+	LIB_FUNC("OXXX4mUk3uk", LibNet::NetConnect);
 	LIB_FUNC("dgJBaeJnGpo", LibNet::NetPoolCreate);
 	LIB_FUNC("K7RlrTkI-mw", LibNet::NetPoolDestroy);
 	LIB_FUNC("C4UgDHHPvdw", LibNet::NetResolverCreate);
@@ -229,9 +253,12 @@ LIB_DEFINE(InitNet_1_Net) {
 	LIB_FUNC("TSM6whtekok", LibNet::NetShutdown);
 	LIB_FUNC("Q4qBuN-c0ZM", LibNet::NetSocket);
 	LIB_FUNC("45ggEzakPJQ", LibNet::NetSocketClose);
+	LIB_FUNC("xphrZusl78E", LibNet::NetGetsockopt);
 	LIB_FUNC("2mKX2Spso7I", LibNet::NetSetsockopt);
 	LIB_FUNC("beRjXBn-z+o", LibNet::NetSend);
+	LIB_FUNC("gvD1greCu0A", LibNet::NetSendto);
 	LIB_FUNC("9wO9XrMsNhc", LibNet::NetRecv);
+	LIB_FUNC("304ooNZxWDY", LibNet::NetRecvfrom);
 	LIB_FUNC("9T2pDF2Ryqg", LibNet::NetHtonl);
 	LIB_FUNC("iWQWrwiSt8A", LibNet::NetHtons);
 	LIB_FUNC("pQGpHYopAIY", LibNet::NetNtohl);
@@ -599,34 +626,66 @@ static int KYTY_SYSV_ABI HttpUriBuild(char* out, size_t* require, size_t prepare
 		return HTTP_ERROR_INVALID_VALUE;
 	}
 
-	std::string uri;
-	if (src_element->scheme != nullptr) {
-		uri.append(src_element->scheme);
-		uri.push_back(':');
-	}
+	constexpr uint32_t BUILD_WITH_SCHEME   = 0x01;
+	constexpr uint32_t BUILD_WITH_HOSTNAME = 0x02;
+	constexpr uint32_t BUILD_WITH_PORT     = 0x04;
+	constexpr uint32_t BUILD_WITH_PATH     = 0x08;
+	constexpr uint32_t BUILD_WITH_USERNAME = 0x10;
+	constexpr uint32_t BUILD_WITH_PASSWORD = 0x20;
+	constexpr uint32_t BUILD_WITH_QUERY    = 0x40;
+	constexpr uint32_t BUILD_WITH_FRAGMENT = 0x80;
+	constexpr uint32_t BUILD_WITH_ALL      = 0xff;
 
-	if (src_element->opaque == 0) {
-		if (src_element->hostname != nullptr) {
+	// No component bits preserves the legacy full-URI build.
+	const uint32_t parts         = (option & BUILD_WITH_ALL) == 0 ? BUILD_WITH_ALL : option;
+	const bool     hierarchical  = src_element->opaque == 0 && src_element->hostname != nullptr;
+	const bool     with_hostname = (parts & BUILD_WITH_HOSTNAME) != 0 && hierarchical;
+
+	std::string uri;
+	if ((parts & BUILD_WITH_SCHEME) != 0) {
+		if (src_element->scheme != nullptr) {
+			uri.append(src_element->scheme);
+			uri.push_back(':');
+		}
+		// Scheme-only builds include the authority marker.
+		if (hierarchical) {
 			uri.append("//");
-			if (src_element->username != nullptr) {
-				uri.append(src_element->username);
-				if (src_element->password != nullptr) {
-					uri.push_back(':');
-					uri.append(src_element->password);
-				}
-				uri.push_back('@');
-			}
-			uri.append(src_element->hostname);
-			if (src_element->port != 0) {
-				uri.push_back(':');
-				uri.append(std::to_string(src_element->port));
-			}
 		}
 	}
 
-	AppendUriPart(&uri, src_element->path);
-	AppendUriPart(&uri, src_element->query);
-	AppendUriPart(&uri, src_element->fragment);
+	const bool with_username = (parts & BUILD_WITH_USERNAME) != 0 && src_element->username != nullptr;
+	const bool with_password = (parts & BUILD_WITH_PASSWORD) != 0 && src_element->password != nullptr;
+	if (with_username) {
+		uri.append(src_element->username);
+	}
+	if (with_password) {
+		if (with_username) {
+			uri.push_back(':');
+		}
+		uri.append(src_element->password);
+	}
+	if (with_hostname) {
+		if (with_username || with_password) {
+			uri.push_back('@');
+		}
+		uri.append(src_element->hostname);
+	}
+	if ((parts & BUILD_WITH_PORT) != 0 && hierarchical && src_element->port != 0) {
+		if (with_hostname) {
+			uri.push_back(':');
+		}
+		uri.append(std::to_string(src_element->port));
+	}
+
+	if ((parts & BUILD_WITH_PATH) != 0) {
+		AppendUriPart(&uri, src_element->path);
+	}
+	if ((parts & BUILD_WITH_QUERY) != 0) {
+		AppendUriPart(&uri, src_element->query);
+	}
+	if ((parts & BUILD_WITH_FRAGMENT) != 0) {
+		AppendUriPart(&uri, src_element->fragment);
+	}
 
 	const auto needed = uri.size() + 1;
 	if (require != nullptr) {
@@ -680,6 +739,15 @@ LIB_DEFINE(InitNet_1_Http) {
 	LIB_FUNC("yigr4V0-HTM", Http::HttpSetRecvTimeOut);
 	LIB_FUNC("T-mGo9f3Pu4", Http::HttpSetAutoRedirect);
 	LIB_FUNC("qFg2SuyTJJY", Http::HttpSetAuthEnabled);
+	LIB_FUNC("h9wmFZX4i-4", Http::HttpSetRedirectCallback);
+	LIB_FUNC("Kh6bS2HQKbo", Http::HttpSetCookieRecvCallback);
+	LIB_FUNC("vO4B-42ef-k", Http::HttpSetRequestStatusCallback);
+	LIB_FUNC("i9mhafzkEi8", Http::HttpSetInflateGZIPEnabled);
+	LIB_FUNC("PDxS48xGQLs", Http::HttpSetChunkedTransferEnabled);
+	LIB_FUNC("DK+GoXCNT04", Http::HttpsLoadCert);
+	LIB_FUNC("zXqcE0fizz0", Http::HttpsUnloadCert);
+	LIB_FUNC("JBN6N-EY+3M", Http::HttpsGetSslError);
+	LIB_FUNC("0onIrKx9NIE", Http::HttpGetLastErrno);
 	LIB_FUNC("IWalAn-guFs", LibHttp::HttpUriParse);
 	LIB_FUNC("YuOW3dDAKYc", LibHttp::HttpUriEscape);
 	LIB_FUNC("5LZA+KPISVA", LibHttp::HttpUriBuild);
@@ -1441,13 +1509,43 @@ namespace LibNpCommerce {
 
 LIB_VERSION("NpCommerce", 1, "NpCommerce", 1, 1);
 
-constexpr int COMMERCE_STATUS_NONE        = 0;
-constexpr int COMMERCE_STATUS_INITIALIZED = 1;
+constexpr int COMMERCE_STATUS_NONE          = 0;
+constexpr int COMMERCE_STATUS_INITIALIZED   = 1;
+constexpr int COMMERCE_STATUS_FINISHED      = 3;
+constexpr int COMMERCE_RESULT_USER_CANCELED = 1;
 
 constexpr int COMMERCE_ERROR_NOT_INITIALIZED     = static_cast<int>(0x80B80003u);
 constexpr int COMMERCE_ERROR_ALREADY_INITIALIZED = static_cast<int>(0x80B80004u);
+constexpr int COMMERCE_ERROR_NOT_FINISHED        = static_cast<int>(0x80B80005u);
+constexpr int COMMERCE_ERROR_PARAM_INVALID       = static_cast<int>(0x80B8000Au);
+constexpr int COMMERCE_ERROR_ARG_NULL            = static_cast<int>(0x80B8000Du);
 
-static int g_commerce_status = COMMERCE_STATUS_NONE;
+struct CommerceDialogParam {
+	uint8_t            base_param[48];
+	int32_t            size;
+	int32_t            user_id;
+	int32_t            mode;
+	uint32_t           service_label;
+	const char* const* targets;
+	uint32_t           num_targets;
+	uint32_t           padding;
+	uint64_t           features;
+	void*              user_data;
+	uint8_t            reserved[32];
+};
+
+struct CommerceDialogResult {
+	int32_t result;
+	bool    authorized;
+	void*   user_data;
+	uint8_t reserved[32];
+};
+
+static_assert(sizeof(CommerceDialogParam) == 128 && offsetof(CommerceDialogParam, user_data) == 88);
+static_assert(sizeof(CommerceDialogResult) == 48 && offsetof(CommerceDialogResult, user_data) == 8);
+
+static int                  g_commerce_status = COMMERCE_STATUS_NONE;
+static CommerceDialogResult g_commerce_result {};
 
 static int KYTY_SYSV_ABI NpCommerceDialogInitialize() {
 	PRINT_NAME();
@@ -1464,7 +1562,45 @@ static int KYTY_SYSV_ABI NpCommerceDialogTerminate() {
 		return COMMERCE_ERROR_NOT_INITIALIZED;
 	}
 	g_commerce_status = COMMERCE_STATUS_NONE;
+	g_commerce_result = {};
 	return OK;
+}
+
+static int KYTY_SYSV_ABI NpCommerceDialogOpen(const CommerceDialogParam* param) {
+	PRINT_NAME();
+	if (g_commerce_status == COMMERCE_STATUS_NONE) {
+		return COMMERCE_ERROR_NOT_INITIALIZED;
+	}
+	if (param == nullptr) {
+		return COMMERCE_ERROR_ARG_NULL;
+	}
+	g_commerce_result = {};
+	if (param->size == sizeof(CommerceDialogParam)) {
+		g_commerce_result.user_data = param->user_data;
+	}
+	g_commerce_status = COMMERCE_STATUS_FINISHED;
+	if (param->size != sizeof(CommerceDialogParam) || param->mode < 0 || param->mode > 5 ||
+	    std::ranges::any_of(param->reserved, [](uint8_t value) { return value != 0; })) {
+		g_commerce_result.result = COMMERCE_ERROR_PARAM_INVALID;
+		return COMMERCE_ERROR_PARAM_INVALID;
+	}
+	g_commerce_result.result = COMMERCE_RESULT_USER_CANCELED;
+	return OK;
+}
+
+static int KYTY_SYSV_ABI NpCommerceDialogGetResult(CommerceDialogResult* result) {
+	PRINT_NAME();
+	if (g_commerce_status == COMMERCE_STATUS_NONE) {
+		return COMMERCE_ERROR_NOT_INITIALIZED;
+	}
+	if (result == nullptr) {
+		return COMMERCE_ERROR_ARG_NULL;
+	}
+	if (g_commerce_status != COMMERCE_STATUS_FINISHED) {
+		return COMMERCE_ERROR_NOT_FINISHED;
+	}
+	*result = g_commerce_result;
+	return result->result;
 }
 
 static int KYTY_SYSV_ABI NpCommerceDialogUpdateStatus() {
@@ -1476,6 +1612,8 @@ static int KYTY_SYSV_ABI NpCommerceDialogUpdateStatus() {
 LIB_DEFINE(InitNet_1_NpCommerce) {
 	LIB_FUNC("0aR2aWmQal4", NpCommerceDialogInitialize);
 	LIB_FUNC("m-I92Ab50W8", NpCommerceDialogTerminate);
+	LIB_FUNC("DfSCDRA3EjY", NpCommerceDialogOpen);
+	LIB_FUNC("r42bWcQbtZY", NpCommerceDialogGetResult);
 	LIB_FUNC("LR5cwFMMCVE", NpCommerceDialogUpdateStatus);
 }
 
@@ -1503,6 +1641,7 @@ LIB_DEFINE(InitNet_1_NpManager) {
 	LIB_FUNC("rbknaUjpqWo", NpManager::NpGetAccountIdA);
 	LIB_FUNC("JT+t00a3TxA", NpManager::NpGetAccountCountryA);
 	LIB_FUNC("+4DegjBqV1g", NpManager::NpGetAccountAge);
+	LIB_FUNC("3Tcz5bNCfZQ", NpManager::NpGetAccountLanguage2);
 	LIB_FUNC("GpLQDNKICac", NpManager::NpCreateRequest);
 	LIB_FUNC("eiqMCt9UshI", NpManager::NpCreateAsyncRequest);
 	LIB_FUNC("S7QTn72PrDw", NpManager::NpDeleteRequest);
@@ -1535,152 +1674,6 @@ LIB_DEFINE(InitNet_1_NpSessionSignaling) {
 }
 
 } // namespace LibNpSessionSignaling
-
-namespace LibNpEntitlementAccess {
-
-LIB_VERSION("NpEntitlementAccess", 1, "NpEntitlementAccess", 1, 1);
-
-constexpr int      NP_ENTITLEMENT_ACCESS_ERROR_PARAMETER      = -2122514430; /* 0x817D0002 */
-constexpr int      NP_ENTITLEMENT_ACCESS_ERROR_NO_ENTITLEMENT = -2122514425; /* 0x817D0007 */
-constexpr uint32_t NP_ENTITLEMENT_ACCESS_SKU_FLAG_FULL        = 3;
-
-struct NpEntitlementAccessInitParam {
-	char reserved[32];
-};
-
-struct NpEntitlementAccessBootParam {
-	char reserved[32];
-};
-
-struct NpUnifiedEntitlementLabel {
-	char data[17];
-	char padding[3];
-};
-
-struct NpEntitlementAccessAddcontEntitlementInfo {
-	NpUnifiedEntitlementLabel entitlement_label;
-	uint32_t                  package_type;
-	uint32_t                  download_status;
-};
-
-struct NpEntitlementAccessEntitlementKey {
-	uint8_t data[16];
-};
-
-static constexpr NpEntitlementAccessAddcontEntitlementInfo NP_ENTITLEMENT_ACCESS_ADDON_LIST[] = {
-    {{{"85y-je"}, {}}, 3, 4}, // GTA V hash 0xf4315381
-    {{{"5d5c48"}, {}}, 3, 4}, // GTA V hash 0x961c34b0
-    {{{"_mtqu6"}, {}}, 3, 4}, // GTA V hash 0x9cd1bcad
-};
-
-static int KYTY_SYSV_ABI NpEntitlementAccessInitialize(
-    const NpEntitlementAccessInitParam* init_param, NpEntitlementAccessBootParam* boot_param) {
-	PRINT_NAME();
-
-	if (init_param == nullptr || boot_param == nullptr) {
-		return NP_ENTITLEMENT_ACCESS_ERROR_PARAMETER;
-	}
-
-	memset(boot_param, 0, sizeof(*boot_param));
-
-	return 0;
-}
-
-static int KYTY_SYSV_ABI NpEntitlementAccessGetSkuFlag(uint32_t* sku_flag) {
-	PRINT_NAME();
-
-	if (sku_flag == nullptr) {
-		return NP_ENTITLEMENT_ACCESS_ERROR_PARAMETER;
-	}
-
-	*sku_flag = NP_ENTITLEMENT_ACCESS_SKU_FLAG_FULL;
-	return 0;
-}
-
-static int KYTY_SYSV_ABI NpEntitlementAccessGetAddcontEntitlementInfoList(
-    uint32_t service_label, NpEntitlementAccessAddcontEntitlementInfo* list, uint32_t list_num,
-    uint32_t* hit_num) {
-	PRINT_NAME();
-
-	LOGF("\t service_label = %" PRIu32 "\n", service_label);
-	LOGF("\t list          = 0x%016" PRIx64 "\n", reinterpret_cast<uint64_t>(list));
-	LOGF("\t list_num      = %" PRIu32 "\n", list_num);
-	LOGF("\t hit_num       = 0x%016" PRIx64 "\n", reinterpret_cast<uint64_t>(hit_num));
-
-	if (hit_num == nullptr || (list == nullptr && list_num != 0)) {
-		return NP_ENTITLEMENT_ACCESS_ERROR_PARAMETER;
-	}
-
-	*hit_num = static_cast<uint32_t>(sizeof(NP_ENTITLEMENT_ACCESS_ADDON_LIST) /
-	                                 sizeof(NP_ENTITLEMENT_ACCESS_ADDON_LIST[0]));
-
-	if (list != nullptr && list_num != 0) {
-		memset(list, 0, sizeof(*list) * list_num);
-
-		const auto copy_num = (list_num < *hit_num ? list_num : *hit_num);
-		for (uint32_t i = 0; i < copy_num; i++) {
-			list[i] = NP_ENTITLEMENT_ACCESS_ADDON_LIST[i];
-		}
-	}
-
-	return 0;
-}
-
-static int KYTY_SYSV_ABI NpEntitlementAccessGetAddcontEntitlementInfo(
-    uint32_t service_label, const NpUnifiedEntitlementLabel* entitlement_label,
-    NpEntitlementAccessAddcontEntitlementInfo* info) {
-	PRINT_NAME();
-
-	LOGF("\t service_label     = %" PRIu32 "\n", service_label);
-	LOGF("\t entitlement_label = 0x%016" PRIx64 "\n",
-	     reinterpret_cast<uint64_t>(entitlement_label));
-	LOGF("\t info              = 0x%016" PRIx64 "\n", reinterpret_cast<uint64_t>(info));
-
-	if (entitlement_label == nullptr || info == nullptr) {
-		return NP_ENTITLEMENT_ACCESS_ERROR_PARAMETER;
-	}
-
-	memset(info, 0, sizeof(*info));
-
-	for (const auto& entitlement: NP_ENTITLEMENT_ACCESS_ADDON_LIST) {
-		if (strncmp(entitlement_label->data, entitlement.entitlement_label.data,
-		            sizeof(entitlement_label->data)) == 0) {
-			*info = entitlement;
-			return 0;
-		}
-	}
-
-	return NP_ENTITLEMENT_ACCESS_ERROR_NO_ENTITLEMENT;
-}
-
-static int KYTY_SYSV_ABI NpEntitlementAccessGetEntitlementKey(
-    uint32_t service_label, const NpUnifiedEntitlementLabel* entitlement_label,
-    NpEntitlementAccessEntitlementKey* key) {
-	PRINT_NAME();
-
-	LOGF("\t service_label     = %" PRIu32 "\n"
-	     "\t entitlement_label = 0x%016" PRIx64 "\n"
-	     "\t key               = 0x%016" PRIx64 "\n",
-	     service_label, reinterpret_cast<uint64_t>(entitlement_label),
-	     reinterpret_cast<uint64_t>(key));
-
-	if (entitlement_label == nullptr || key == nullptr) {
-		return NP_ENTITLEMENT_ACCESS_ERROR_PARAMETER;
-	}
-
-	return NP_ENTITLEMENT_ACCESS_ERROR_NO_ENTITLEMENT;
-}
-
-LIB_DEFINE(InitNet_1_NpEntitlementAccess) {
-	LIB_FUNC("jO8DM8oyego", LibNpEntitlementAccess::NpEntitlementAccessInitialize);
-	LIB_FUNC("lPDO62PpJIA", LibNpEntitlementAccess::NpEntitlementAccessGetSkuFlag);
-	LIB_FUNC("TFyU+KFBv54",
-	         LibNpEntitlementAccess::NpEntitlementAccessGetAddcontEntitlementInfoList);
-	LIB_FUNC("xddD23+8TfQ", LibNpEntitlementAccess::NpEntitlementAccessGetAddcontEntitlementInfo);
-	LIB_FUNC("5LiMEPuW0DQ", LibNpEntitlementAccess::NpEntitlementAccessGetEntitlementKey);
-}
-
-} // namespace LibNpEntitlementAccess
 
 namespace LibNpAuth {
 

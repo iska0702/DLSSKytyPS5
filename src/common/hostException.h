@@ -35,6 +35,39 @@ struct ExceptionInfo {
 	void* native_context = nullptr;
 };
 
+// Windows: the stack range the TEB gives while guest code runs on a guest stack (pthread.cpp
+// RunOnGuestStack, runtimeLinker.cpp RunEntry). Those used to zero StackBase and StackLimit so that
+// __chkstk never probes guest memory. With Control Flow Guard on for the process (a Windows that
+// turns CFG on for every program), ntdll's RtlGuardRestoreContext checks that the rsp an exception
+// handler resumes with lies within the TEB's range and fails fast otherwise (0xC0000409, code 13
+// FAST_FAIL_INVALID_SET_OF_CONTEXT): the first write-tracking fault resumed on a guest thread ends
+// the process silently, no log line (chenxiao07/KytyPS5 issue #56).
+// KYTY_GUEST_TEB_STACK_RANGE=1 (default off): the TEB gives GuestStacksLow..GuestStacksHigh, the
+// region every guest pthread stack lies in (pthread.cpp PTHREAD_STACK_BOTTOM..TOP), when the
+// thread's host stack (TEB DeallocationStack, gs:0x1478) lies above it, else zeros as before.
+// __chkstk probes only below the range's low end: never, as with zeros. The kernel's stack growth
+// needs the faulting address between DeallocationStack and the range's top: never, with the host
+// stack above it. Game-allocated fiber stacks outside the region are not covered.
+// Scratch registers: rcx, rdx, r10, r11. `flag` is an asm memory operand naming
+// g_guest_teb_stack_range. Ported from chenxiao07/KytyPS5 e7109edce (the switch added).
+inline constexpr uint64_t GuestStacksLow  = 0x0000040000ull;
+inline constexpr uint64_t GuestStacksHigh = 0x07efff8000ull;
+extern int32_t            g_guest_teb_stack_range;
+#define KYTY_GUEST_TEB_STACK_RANGE_ASM(flag)                                                     \
+	"movl " flag ", %%r11d\n\t"                                                                    \
+	"xorq %%r10, %%r10\n\t"                                                                        \
+	"movq %%gs:0x1478, %%rcx\n\t"                                                                  \
+	"movabsq $0x7efff8000, %%rdx\n\t"                                                              \
+	"cmpq %%rdx, %%rcx\n\t"                                                                        \
+	"cmovbq %%r10, %%rdx\n\t"                                                                      \
+	"testl %%r11d, %%r11d\n\t"                                                                     \
+	"cmovzq %%r10, %%rdx\n\t"                                                                      \
+	"movq %%rdx, %%gs:0x08\n\t"                                                                    \
+	"movl $0x40000, %%ecx\n\t"                                                                     \
+	"testq %%rdx, %%rdx\n\t"                                                                       \
+	"cmovzq %%r10, %%rcx\n\t"                                                                      \
+	"movq %%rcx, %%gs:0x10\n\t"
+
 using Handler = bool (*)(const ExceptionInfo&);
 
 bool InstallHandler(Handler handler);

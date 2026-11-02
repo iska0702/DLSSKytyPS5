@@ -1,6 +1,7 @@
 #include "libs/audio3d.h"
 
 #include "common/assert.h"
+#include "common/cpuPlacement.h"
 #include "common/threads.h"
 #include "kernel/semaphore.h"
 #include "libs/errno.h"
@@ -54,6 +55,7 @@ static Audio3dInternal g_ports[MAX_PORTS] = {};
 
 static void playback_simulate(void* arg) {
 	auto* port = static_cast<Audio3dInternal*>(arg);
+	Common::PlaceCurrentThreadCold(); // audio pacing
 	EXIT_IF(port == nullptr);
 	EXIT_IF(port->data_mutex == nullptr);
 	EXIT_IF(port->data == nullptr);

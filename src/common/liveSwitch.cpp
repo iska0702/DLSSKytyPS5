@@ -1,5 +1,6 @@
 #include "common/liveSwitch.h"
 
+#include "common/cpuPlacement.h"
 #include "common/hangTrace.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
@@ -62,6 +63,7 @@ uint64_t g_cp_busy_ns     = 0;
 uint64_t g_cp_slice_start = 0; // 0: outside a slice
 
 std::atomic<void (*)(const std::string&)> g_log_sink {nullptr};
+std::atomic<GpuTotals (*)()>              g_gpu_totals {nullptr};
 
 void WriteLog(const std::string& line) {
 	if (auto* sink = g_log_sink.load(std::memory_order_acquire); sink != nullptr) {
@@ -218,6 +220,7 @@ bool ReadWholeFile(const std::string& path, std::string& out) {
 
 void PollLoop() {
 	Profiler::SetThreadName("Kyty.Live");
+	Common::PlaceCurrentThreadCold();
 #if defined(_WIN32)
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
 #endif
@@ -359,9 +362,16 @@ void Registry::Apply(uint64_t flip) {
 			}
 		}
 	}
-	const auto seq = SeqText(staged.seq);
-	WriteLog(fmt::format("Live: seq {} applied at CP flip {} (t_ms {}, t_us {}, cp_busy_us {}): {}\n",
-	                     seq, flip, t_ms, now_ns / 1000u, busy_ns / 1000u,
+	const auto  seq = SeqText(staged.seq);
+	std::string gpu;
+	if (auto* provider = g_gpu_totals.load(std::memory_order_acquire); provider != nullptr) {
+		const auto totals = provider();
+		gpu = fmt::format(" gpu [busy_us {}, idle_us {}, starved_us {}, cmdbufs {}]",
+		                  totals.busy_ns / 1000u, totals.idle_ns / 1000u, totals.starved_ns / 1000u,
+		                  totals.cmdbufs);
+	}
+	WriteLog(fmt::format("Live: seq {} applied at CP flip {} (t_ms {}, t_us {}, cp_busy_us {}){}: {}\n",
+	                     seq, flip, t_ms, now_ns / 1000u, busy_ns / 1000u, gpu,
 	                     changes.empty() ? std::string("no change") : changes));
 	for (const auto& key: unknown) {
 		WriteLog(fmt::format("Live: seq {}: {} is not a live switch in this build (ignored)\n", seq,
@@ -391,6 +401,10 @@ int64_t ParseDefaultOff(const char* value) {
 
 bool Enabled() noexcept {
 	return g_enabled.load(std::memory_order_relaxed);
+}
+
+void SetGpuTotalsProvider(GpuTotals (*provider)()) noexcept {
+	g_gpu_totals.store(provider, std::memory_order_release);
 }
 
 void Start() {

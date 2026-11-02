@@ -97,6 +97,15 @@ void Translator::V_INTERP_P2_F32(const Decoder::Instruction& inst) {
 	WriteOperand(inst.dst, value);
 }
 
+// Upstream d7c189664: FP16_INTERP_MODE packs two halves per dword; the host interpolates the
+// selected half of the per-vertex values (ShaderInfoCollection marks such inputs per-vertex).
+void Translator::V_INTERP_P2_F16(const Decoder::Instruction& inst) {
+	const auto value = ir.Emit(IR::ValueOpcode::GetAttributeF16,
+	                           {IR::Value(inst.src1.value), IR::Value(inst.src2.value),
+	                            IR::Value(uint32_t {inst.src1.op_sel})});
+	WriteF16(inst.dst, IR::F32(value));
+}
+
 void Translator::V_INTERP_MOV_F32(const Decoder::Instruction& inst) {
 	if (inst.src0.value >= 3u) {
 		EXIT("v_interp_mov_f32 mode %u is reserved at pc 0x%08x", inst.src0.value, inst.pc);
@@ -125,6 +134,9 @@ void Translator::EXP(const Decoder::Instruction& inst) {
 void Translator::EmitInterpolation(const Decoder::Instruction& inst) {
 	switch (inst.opcode) {
 		case Decoder::Opcode::V_INTERP_P1_F32: V_INTERP_P1_F32(); return;
+		// P2 interpolates the whole attribute, so the P1 half has nothing to compute.
+		case Decoder::Opcode::V_INTERP_P1LL_F16: return;
+		case Decoder::Opcode::V_INTERP_P2_F16: V_INTERP_P2_F16(inst); return;
 		case Decoder::Opcode::V_INTERP_P2_F32: V_INTERP_P2_F32(inst); return;
 		case Decoder::Opcode::V_INTERP_MOV_F32: V_INTERP_MOV_F32(inst); return;
 		default: return FailMissingTranslation(inst);

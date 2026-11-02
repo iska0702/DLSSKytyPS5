@@ -18,6 +18,9 @@ struct CompileOptions {
 	uint64_t                    shader_hash     = 0;
 	bool                        dump_ir                    = true;
 	bool                        early_dump                 = false;
+	// VK_KHR_maintenance8 is enabled (dynamic image sample texel offsets are valid SPIR-V). Only the
+	// host's SPIR-V validation reads it; the emitted code does not depend on it.
+	bool                        maintenance8_enabled       = false;
 	const char*                 dump_label                 = nullptr;
 	std::span<const uint32_t>   user_data;
 	std::span<const uint32_t>   back_code;

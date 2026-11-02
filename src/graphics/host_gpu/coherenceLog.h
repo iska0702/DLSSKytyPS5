@@ -157,9 +157,11 @@ public:
 	}
 
 	// Whether any entry with a generation in (from, to] intersects one of `ranges`, which must be
-	// sorted by begin and non-overlapping. An unfinished entry is waited for briefly.
-	[[nodiscard]] CheckOutcome Check(uint64_t from, uint64_t to,
-	                                 std::span<const Range> ranges) const noexcept {
+	// sorted by begin and non-overlapping. An unfinished entry is waited for briefly. `hull`: test
+	// each entry against [first begin, last end) before searching the ranges (same answer; the
+	// search touches the range list only for entries inside the hull).
+	[[nodiscard]] CheckOutcome Check(uint64_t from, uint64_t to, std::span<const Range> ranges,
+	                                 bool hull = false) const noexcept {
 		CheckOutcome outcome;
 		if (to <= from) {
 			return outcome;
@@ -182,6 +184,10 @@ public:
 			if (!read) {
 				outcome.result = CheckResult::Unknown;
 				return outcome;
+			}
+			if (hull && (ranges.empty() || range.end <= ranges.front().begin ||
+			             range.begin >= ranges.back().end)) {
+				continue;
 			}
 			if (IntersectsAny(range, ranges)) {
 				outcome.result          = CheckResult::Conflict;

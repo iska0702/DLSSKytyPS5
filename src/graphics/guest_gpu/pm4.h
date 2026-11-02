@@ -19,6 +19,10 @@ class File;
 
 namespace Libs::Graphics::Pm4 {
 
+constexpr uint32_t PacketSizeDw(uint32_t header) {
+	return (header & 0x3fffff00u) == 0x3fff1000u ? 1u : KYTY_PM4_LEN(header);
+}
+
 constexpr uint32_t IT_NOP                       = 0x10;
 constexpr uint32_t IT_SET_BASE                  = 0x11;
 constexpr uint32_t IT_CLEAR_STATE               = 0x12;
@@ -546,6 +550,8 @@ constexpr uint32_t VGT_SHADER_STAGES_EN                                = 0x2D5;
 constexpr uint32_t VGT_LS_HS_CONFIG                                    = 0x2D6;
 constexpr uint32_t VGT_TF_PARAM                                        = 0x2DB;
 constexpr uint32_t DB_ALPHA_TO_MASK                                    = 0x2DC;
+constexpr uint32_t DB_ALPHA_TO_MASK_ALPHA_TO_MASK_ENABLE_SHIFT         = 0;
+constexpr uint32_t DB_ALPHA_TO_MASK_ALPHA_TO_MASK_ENABLE_MASK          = 0x1;
 constexpr uint32_t PA_SU_POLY_OFFSET_DB_FMT_CNTL                       = 0x2DE;
 constexpr uint32_t PA_SU_POLY_OFFSET_DB_FMT_CNTL_NEG_NUM_DB_BITS_SHIFT = 0;
 constexpr uint32_t PA_SU_POLY_OFFSET_DB_FMT_CNTL_NEG_NUM_DB_BITS_MASK  = 0xFF;

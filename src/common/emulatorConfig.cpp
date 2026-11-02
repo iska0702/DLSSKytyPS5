@@ -1,6 +1,7 @@
 #include "common/emulatorConfig.h"
 
 #include "common/assert.h"
+#include "common/debugCounters.h"
 
 #include <algorithm>
 #include <memory>
@@ -16,6 +17,7 @@ void Initialize() {
 }
 
 void Shutdown() {
+	Common::DebugCounters::SetEnabled(false);
 	g_config.reset();
 }
 
@@ -26,9 +28,14 @@ void Load(const ConfigOptions& cfg) {
 	EXIT_IF(cfg.controller_speaker_volume > 100 || cfg.controller_vibration_intensity > 100);
 	EXIT_IF(cfg.audio_master_volume > MAX_AUDIO_VOLUME || cfg.audio_main_volume > MAX_AUDIO_VOLUME ||
 	        cfg.audio_music_volume > MAX_AUDIO_VOLUME ||
-	        cfg.audio_pad_speaker_main_volume > MAX_AUDIO_VOLUME);
+	        cfg.audio_pad_speaker_main_volume > MAX_AUDIO_VOLUME ||
+	        cfg.audio_objects_volume > MAX_AUDIO_VOLUME);
+	EXIT_IF(cfg.keyboard_player > static_cast<uint32_t>(MAX_PLAYERS));
 
 	*g_config = cfg;
+	Detail::g_graphics_debug_dump_enabled = cfg.graphics_debug_dump_enabled;
+	Detail::g_sync_raw_image_buffers      = cfg.sync_raw_image_buffers;
+	Common::DebugCounters::SetEnabled(cfg.perf_overlay_enabled);
 }
 
 uint32_t GetScreenWidth() {
@@ -79,6 +86,35 @@ uint32_t GetAudioPadSpeakerOnMainVolume() {
 	return g_config->audio_pad_speaker_main_volume;
 }
 
+uint32_t GetAudioObjectsVolume() {
+	return g_config->audio_objects_volume;
+}
+
+bool AudioObjectsEnabled() {
+	return g_config->audio_objects_enabled;
+}
+
+uint32_t GetKeyboardPlayer() {
+	return g_config->keyboard_player;
+}
+
+int32_t GetPlayerUserId(int player) {
+	return g_config->user_id + player * PLAYER_USER_ID_STEP;
+}
+
+int GetPlayerFromUserId(int32_t user_id) {
+	for (int player = 0; player < MAX_PLAYERS; player++) {
+		if (user_id == GetPlayerUserId(player)) {
+			return player;
+		}
+	}
+	return -1;
+}
+
+bool IsGuestUserId(int32_t user_id) {
+	return GetPlayerFromUserId(user_id) > 0;
+}
+
 PresentMode GetPresentMode() {
 	return g_config->present_mode;
 }
@@ -89,6 +125,10 @@ int32_t GetGpuIndex() {
 
 bool FullscreenEnabled() {
 	return g_config->fullscreen_enabled;
+}
+
+bool HdrEnabled() {
+	return g_config->hdr_enabled;
 }
 
 bool HideCursorEnabled() {
@@ -103,6 +143,10 @@ bool AmdCpuEnabled() {
 	return g_config->amd_cpu_enabled;
 }
 
+const std::string& GetAmdCpuDecision() {
+	return g_config->amd_cpu_decision;
+}
+
 uint32_t GetVblankFrequency() {
 	return std::clamp(g_config->vblank_frequency, 30u, 360u);
 }
@@ -113,6 +157,10 @@ uint32_t GetConsoleLanguage() {
 
 bool VulkanValidationEnabled() {
 	return g_config->vulkan_validation_enabled;
+}
+
+bool IsNetworkConnected() {
+	return g_config->network_connected;
 }
 
 bool ShaderValidationEnabled() {
@@ -137,10 +185,6 @@ bool CommandBufferDumpEnabled() {
 
 std::filesystem::path GetCommandBufferDumpFolder() {
 	return g_config->command_buffer_dump_folder;
-}
-
-bool GraphicsDebugDumpEnabled() {
-	return g_config->graphics_debug_dump_enabled;
 }
 
 LogDirection GetPrintfDirection() {
@@ -171,6 +215,10 @@ bool ReadbackLinearImagesEnabled() {
 	return g_config->readback_linear_images;
 }
 
+bool ReadbackTiledImagesEnabled() {
+	return g_config->readback_tiled_images;
+}
+
 bool TessellationEnabled() {
 	return g_config->tessellation_enabled;
 }
@@ -179,8 +227,16 @@ bool TrophyEnabled() {
 	return g_config->trophy_enabled;
 }
 
+uint32_t GetTrophyDurationSeconds() {
+	return std::clamp(g_config->trophy_duration_seconds, 5u, 10u);
+}
+
 bool PlayGoHackEnabled() {
 	return g_config->playgo_hack_enabled;
+}
+
+bool SkipNoticeScreen() {
+	return g_config->skip_notice_screen;
 }
 
 bool FSREnabled() { return g_config->fsr_enabled; }
@@ -237,6 +293,10 @@ bool RedZoneProtectionEnabled() {
 
 const Keymap& GetKeymap() {
 	return g_config->keymap;
+}
+
+const std::vector<std::string>& GetGuestArguments() {
+	return g_config->guest_arguments;
 }
 
 } // namespace Config

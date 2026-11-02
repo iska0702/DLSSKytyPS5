@@ -1,5 +1,6 @@
 #include "graphics/host_gpu/renderer/gpuOpProfiler.h"
 
+#include "common/cpuPlacement.h"
 #include "common/hangTrace.h"
 #include "common/profiler.h"
 #include "graphics/host_gpu/graphicContext.h"
@@ -705,6 +706,7 @@ public:
 
 private:
 	void Run() {
+		Common::PlaceCurrentThreadCold();
 		for (;;) {
 			std::unique_ptr<CaptureData> capture;
 			{

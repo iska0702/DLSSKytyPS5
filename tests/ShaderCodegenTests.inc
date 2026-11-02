@@ -1053,9 +1053,10 @@ void CheckLodStatsPlainVariant() {
               plain.size());
 }
 
-// Buffer and scalar-buffer loads that straddle the end of a descriptor range whose size is not a
-// multiple of 4 bytes, with the shader's dword bounds check and with the device's
-// robustBufferAccess2 check. Out-of-range dwords (any byte past the range) must read 0.
+// Buffer and scalar-buffer loads that straddle the end of a guest descriptor range whose size is
+// not a multiple of 4 bytes, with the shader's bounds check and with the device's
+// robustBufferAccess2 check. Out-of-range dwords (any byte past the range) must read 0, and so
+// must every byte and short of the dword that is only partly inside.
 void CheckRobustBufferLoads(VulkanHarness *vulkan) {
   constexpr const char *name = "CodegenRobustBufferLoads";
   using O = ShaderOpcode;
@@ -1106,7 +1107,6 @@ void CheckRobustBufferLoads(VulkanHarness *vulkan) {
   test.compute_info.threads_num[2] = 1;
   test.compute_info.thread_ids_num = 1;
   test.has_compute_info = true;
-  test.storage_buffer_range_bytes = RangeBytes;
   test.opcodes = {O::V_LSHLREV_B32, O::BUFFER_LOAD_DWORD, O::BUFFER_LOAD_USHORT,
                   O::BUFFER_LOAD_SSHORT, O::BUFFER_LOAD_UBYTE, O::BUFFER_LOAD_SBYTE,
                   O::BUFFER_LOAD_DWORDX4, O::S_BUFFER_LOAD_DWORDX4, O::S_BUFFER_LOAD_DWORD,
@@ -1154,15 +1154,15 @@ void CheckRobustBufferLoads(VulkanHarness *vulkan) {
   std::vector<u32> shader_spirv;
   std::vector<u32> device_words;
   std::vector<u32> shader_words;
+  // The host binds storage buffers in whole dwords (descriptors.cpp NativeStorageBuffer):
+  // NVIDIA returns data for a dword only partly inside the range despite reporting a 1-byte
+  // robustness alignment. Both runs bind that rounded range, as the emulator does. Subword loads
+  // use native 8/16-bit storage views, whose OpArrayLength counts bytes or shorts, so with the
+  // unrounded range the shader check would return the short at byte 4 * (Data + 8).
+  test.storage_buffer_range_bytes = RangeBytes & ~3u;
   {
-    // The host binds storage buffers in whole dwords (descriptors.cpp NativeStorageBuffer):
-    // NVIDIA returns data for a dword only partly inside the range despite reporting a 1-byte
-    // robustness alignment. The shader-checked run keeps the odd range to show that rounding
-    // down changes nothing for the shader's own checks.
-    auto device_test = test;
-    device_test.storage_buffer_range_bytes = RangeBytes & ~3u;
     ScopedCodegenOptions scope(device);
-    device_words = RunCollect(vulkan, device_test, Data, &device_spirv);
+    device_words = RunCollect(vulkan, test, Data, &device_spirv);
   }
   {
     ScopedCodegenOptions scope(shader);
@@ -1684,7 +1684,7 @@ void BenchExecSelects(VulkanHarness *vulkan) {
         auto buffer = vulkan->CreateStorageBuffer(name, test.initial, test.initial.size());
         double us = 0.0;
         vulkan->Dispatch(test, variant.compiled, buffer, nullptr, nullptr, nullptr, nullptr,
-                         nullptr, Repeats, &us);
+                         nullptr, {}, Repeats, &us);
         if (round != 0) {
           variant.best_us = std::min(variant.best_us, us);
         }

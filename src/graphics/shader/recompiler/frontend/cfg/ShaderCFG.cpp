@@ -1,11 +1,13 @@
 #include "graphics/shader/recompiler/frontend/cfg/ShaderCFG.h"
 
 #include "common/assert.h"
+#include "graphics/shader/recompiler/CodegenOptions.h"
 
 #include <algorithm>
 #include <fmt/format.h>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <stack>
@@ -468,8 +470,10 @@ bool ResolveSetpcDwordJumpTable(const Decoder::Program& program, uint32_t setpc_
 	if (!ResolveJumpTableEntryCount(program, load_index, load.src1, 2u, &entry_count)) {
 		return false;
 	}
+	// Code-table loads are not translated, so a selector that is also the load destination
+	// keeps its scaled index at the branch.
 	uint32_t selector_code = UINT32_MAX;
-	if (!ScalarOperandCode(load.src1, selector_code) || selector_code == offset_code ||
+	if (!ScalarOperandCode(load.src1, selector_code) ||
 	    ScalarCodeWrittenInRange(program, load_index + 1u, setpc_index, selector_code)) {
 		return false;
 	}
@@ -567,9 +571,8 @@ bool ResolveSetpcTargets(const Decoder::Program& program, uint32_t setpc_index,
 	return false;
 }
 
-bool IsValidTarget(uint32_t target, const std::set<uint32_t>& instruction_pcs, uint32_t first_pc,
-                   uint32_t end_pc) {
-	return target == end_pc || (target >= first_pc && instruction_pcs.contains(target));
+bool IsValidTarget(uint32_t target, std::span<const Instruction> instructions, uint32_t end_pc) {
+	return target == end_pc || std::ranges::binary_search(instructions, target, {}, &Instruction::pc);
 }
 
 std::vector<uint32_t> AllBlockIds(uint32_t count) {
@@ -1180,6 +1183,69 @@ bool CanReachBefore(const Graph& graph, uint32_t start, uint32_t target, uint32_
 	return false;
 }
 
+// KYTY_CFG_CLONE_EXITS: the merge of a selection whose arms leave only through early returns
+// (edges to a linear chain ending in a return, e.g. a cloned discard tail) besides one common
+// continuation. Post-dominance sees the returns and finds no merge; with those edges ignored the
+// continuation is the merge. Every other path from the arms must reach it before any block that
+// follows it. Outside loops only; a merge the header does not dominate gets its own gateway
+// (SplitSharedMergeBlock).
+uint32_t MergeIgnoringReturnArms(const Graph& graph, const BasicBlock& header) {
+	const auto count = graph.blocks.size();
+	std::vector<int8_t> terminal(count, -1);
+	const auto is_terminal = [&](uint32_t id) {
+		if (id >= count) return true;
+		if (terminal[id] < 0) terminal[id] = HasLinearPathToTerminal(graph, id) ? 1 : 0;
+		return terminal[id] == 1;
+	};
+	// Blocks reachable from the starts over non-return edges, never entering `blocked`.
+	const auto reach = [&](std::initializer_list<uint32_t> starts, uint32_t blocked) {
+		std::vector<bool>     seen(count, false);
+		std::vector<uint32_t> pending;
+		for (const auto start: starts) {
+			if (start < count && start != blocked && !is_terminal(start)) pending.push_back(start);
+		}
+		while (!pending.empty()) {
+			const auto id = pending.back();
+			pending.pop_back();
+			if (id >= count || seen[id]) continue;
+			seen[id] = true;
+			const auto* block = graph.FindBlock(id);
+			if (block == nullptr) continue;
+			for (const auto next: block->successors) {
+				if (next != blocked && next != header.id && !is_terminal(next)) pending.push_back(next);
+			}
+		}
+		return seen;
+	};
+	const auto true_target  = header.terminator.true_block;
+	const auto false_target = header.terminator.false_block;
+	if (true_target >= count || false_target >= count) return UINT32_MAX;
+	const auto from_true  = reach({true_target}, UINT32_MAX);
+	const auto from_false = reach({false_target}, UINT32_MAX);
+	std::vector<uint32_t> valid;
+	for (uint32_t m = 0; m < count; m++) {
+		if (m == header.id || !from_true[m] || !from_false[m]) {
+			continue;
+		}
+		// Paths from the arms that avoid m must not reach anything m leads to.
+		const auto avoiding = reach({true_target, false_target}, m);
+		const auto after    = reach({m}, UINT32_MAX);
+		bool       joins    = false;
+		for (uint32_t id = 0; id < count && !joins; id++) {
+			joins = id != m && avoiding[id] && after[id];
+		}
+		if (!joins) valid.push_back(m);
+	}
+	// The nearest merge: every other candidate follows it.
+	for (const auto m: valid) {
+		const auto after = reach({m}, UINT32_MAX);
+		if (std::ranges::all_of(valid, [&](uint32_t other) { return other == m || after[other]; })) {
+			return m;
+		}
+	}
+	return UINT32_MAX;
+}
+
 uint32_t FindSelectionMerge(const Graph& graph, const BasicBlock& block) {
 	const auto  global_merge = graph.FindNearestCommonPostDominator(block.terminator.true_block,
 	                                                                block.terminator.false_block);
@@ -1213,6 +1279,11 @@ uint32_t FindSelectionMerge(const Graph& graph, const BasicBlock& block) {
 				}
 				if (HasLinearPathToTerminal(graph, false_target)) {
 					return true_target;
+				}
+				if (GetCodegenOptions().cfg_clone_exits) {
+					if (const auto merge = MergeIgnoringReturnArms(graph, block); merge != UINT32_MAX) {
+						return merge;
+					}
 				}
 			}
 		}
@@ -1896,9 +1967,7 @@ Graph BuildGraph(const Decoder::Program& program) {
 	const auto first_pc = program.instructions.front().pc;
 	const auto end_pc   = ProgramEndPc(program);
 
-	std::set<uint32_t> instruction_pcs;
 	for (const auto& inst: program.instructions) {
-		instruction_pcs.insert(inst.pc);
 		if (inst.opcode == Opcode::UNSUPPORTED) {
 			ExitBuildFailure(
 			    graph, FailureKind::UnsupportedInstruction, UINT32_MAX,
@@ -1907,23 +1976,21 @@ Graph BuildGraph(const Decoder::Program& program) {
 		}
 	}
 
-	std::set<uint32_t> labels;
-	labels.insert(first_pc);
-	labels.insert(end_pc);
+	std::vector<uint32_t> labels {first_pc, end_pc};
 
 	std::map<uint32_t, SetpcTargetInfo> setpc_targets;
 	for (uint32_t i = 0; i < program.instructions.size(); i++) {
 		const auto& inst    = program.instructions[i];
 		const auto  next_pc = InstructionEndPc(inst);
 		if (Decoder::IsDirectBranch(inst.opcode)) {
-			if (!IsValidTarget(inst.branch_target, instruction_pcs, first_pc, end_pc)) {
+			if (!IsValidTarget(inst.branch_target, program.instructions, end_pc)) {
 				ExitBuildFailure(graph, FailureKind::InvalidBranchTarget, UINT32_MAX,
 				                 fmt::format("branch at pc 0x{:08x} targets invalid pc 0x{:08x}",
 				                             inst.pc, inst.branch_target));
 			}
-			labels.insert(inst.branch_target);
+			labels.push_back(inst.branch_target);
 			if (next_pc <= end_pc) {
-				labels.insert(next_pc);
+				labels.push_back(next_pc);
 			}
 		} else if (inst.opcode == Opcode::S_SETPC_B64) {
 			SetpcTargetInfo target_info;
@@ -1936,30 +2003,32 @@ Graph BuildGraph(const Decoder::Program& program) {
 			                            ? std::span<const uint32_t>(target_info.target_pcs)
 			                            : std::span<const uint32_t>(&target_info.target, 1);
 			for (const auto target: target_pcs) {
-				if (!IsValidTarget(target, instruction_pcs, first_pc, end_pc)) {
+				if (!IsValidTarget(target, program.instructions, end_pc)) {
 					ExitBuildFailure(
 					    graph, FailureKind::InvalidBranchTarget, UINT32_MAX,
 					    fmt::format("S_SETPC_B64 at pc 0x{:08x} targets invalid pc 0x{:08x}",
 					                inst.pc, target));
 				}
-				labels.insert(target);
+				labels.push_back(target);
 			}
 			setpc_targets.emplace(inst.pc, std::move(target_info));
 			if (next_pc <= end_pc) {
-				labels.insert(next_pc);
+				labels.push_back(next_pc);
 			}
 		} else if (inst.opcode == Opcode::S_ENDPGM) {
-			labels.insert(next_pc);
+			labels.push_back(next_pc);
 		}
 	}
 
-	std::vector<uint32_t> sorted_labels(labels.begin(), labels.end());
-	for (uint32_t i = 0; i < sorted_labels.size(); i++) {
-		const auto start = sorted_labels[i];
+	SortUnique(labels);
+	graph.blocks.reserve(labels.size());
+	for (uint32_t i = 0; i < labels.size(); i++) {
+		const auto start = labels[i];
 		if (start > end_pc) {
 			continue;
 		}
-		if (start != end_pc && !instruction_pcs.contains(start)) {
+		const auto begin = std::ranges::lower_bound(program.instructions, start, {}, &Instruction::pc);
+		if (start != end_pc && (begin == program.instructions.end() || begin->pc != start)) {
 			ExitBuildFailure(
 			    graph, FailureKind::InvalidLabel, UINT32_MAX,
 			    fmt::format("CFG label does not start on an instruction: 0x{:08x}", start));
@@ -1968,11 +2037,8 @@ Graph BuildGraph(const Decoder::Program& program) {
 		BasicBlock block;
 		block.id         = static_cast<uint32_t>(graph.blocks.size());
 		block.start_pc   = start;
-		block.end_pc     = i + 1u < sorted_labels.size() ? sorted_labels[i + 1u] : end_pc;
-		block.inst_begin = static_cast<uint32_t>(
-		    std::lower_bound(program.instructions.begin(), program.instructions.end(), start,
-		                     [](const Instruction& inst, uint32_t pc) { return inst.pc < pc; }) -
-		    program.instructions.begin());
+		block.end_pc     = i + 1u < labels.size() ? labels[i + 1u] : end_pc;
+		block.inst_begin = static_cast<uint32_t>(begin - program.instructions.begin());
 		block.inst_end = static_cast<uint32_t>(
 		    std::lower_bound(program.instructions.begin(), program.instructions.end(), block.end_pc,
 		                     [](const Instruction& inst, uint32_t pc) { return inst.pc < pc; }) -
@@ -1982,10 +2048,10 @@ Graph BuildGraph(const Decoder::Program& program) {
 
 	graph.entry_block = 0;
 
-	std::map<uint32_t, uint32_t> pc_to_block;
-	for (const auto& block: graph.blocks) {
-		pc_to_block.emplace(block.start_pc, block.id);
-	}
+	const auto block_at_pc = [&](uint32_t pc) {
+		const auto found = std::ranges::lower_bound(graph.blocks, pc, {}, &BasicBlock::start_pc);
+		return found != graph.blocks.end() && found->start_pc == pc ? found->id : UINT32_MAX;
+	};
 
 	for (auto& block: graph.blocks) {
 		block.terminator = {};
@@ -2007,7 +2073,7 @@ Graph BuildGraph(const Decoder::Program& program) {
 				block.terminator.indirect_selector_code = target_info.selector_code;
 				for (const auto target_pc: target_info.target_pcs) {
 					block.terminator.indirect_target_pcs.push_back(target_pc);
-					block.terminator.indirect_targets.push_back(pc_to_block.at(target_pc));
+					block.terminator.indirect_targets.push_back(block_at_pc(target_pc));
 				}
 				const auto selector_count = std::min(target_info.selector_values.size(),
 				                                     target_info.selector_target_pcs.size());
@@ -2015,35 +2081,35 @@ Graph BuildGraph(const Decoder::Program& program) {
 					block.terminator.indirect_selector_values.push_back(
 					    target_info.selector_values[i]);
 					block.terminator.indirect_selector_targets.push_back(
-					    pc_to_block.at(target_info.selector_target_pcs[i]));
+					    block_at_pc(target_info.selector_target_pcs[i]));
 				}
 			} else {
 				block.terminator.kind       = TerminatorKind::Branch;
 				block.terminator.condition  = BranchCondition::Always;
-				block.terminator.true_block = pc_to_block.at(target_info.target);
+				block.terminator.true_block = block_at_pc(target_info.target);
 			}
 		} else if (last.opcode == Opcode::S_BRANCH) {
 			block.terminator.kind       = TerminatorKind::Branch;
 			block.terminator.condition  = BranchCondition::Always;
-			block.terminator.true_block = pc_to_block.at(last.branch_target);
+			block.terminator.true_block = block_at_pc(last.branch_target);
 		} else if (Decoder::IsConditionalBranch(last.opcode)) {
 			block.terminator.kind       = TerminatorKind::ConditionalBranch;
 			block.terminator.condition  = ConditionForOpcode(last.opcode);
-			block.terminator.true_block = pc_to_block.at(last.branch_target);
-			const auto fallthrough      = pc_to_block.find(next_pc);
-			if (fallthrough == pc_to_block.end()) {
+			block.terminator.true_block = block_at_pc(last.branch_target);
+			const auto fallthrough      = block_at_pc(next_pc);
+			if (fallthrough == UINT32_MAX) {
 				ExitBuildFailure(
 				    graph, FailureKind::MissingFallthrough, block.id,
 				    fmt::format("conditional branch at pc 0x{:08x} has no fallthrough block",
 				                last.pc));
 			}
-			block.terminator.false_block = fallthrough->second;
+			block.terminator.false_block = fallthrough;
 		} else {
-			auto next = pc_to_block.find(block.end_pc);
-			if (next != pc_to_block.end() && block.end_pc != block.start_pc) {
+			const auto next = block_at_pc(block.end_pc);
+			if (next != UINT32_MAX && block.end_pc != block.start_pc) {
 				block.terminator.kind       = TerminatorKind::Branch;
 				block.terminator.condition  = BranchCondition::Always;
-				block.terminator.true_block = next->second;
+				block.terminator.true_block = next;
 			} else {
 				block.terminator.kind = TerminatorKind::Return;
 			}
@@ -2295,6 +2361,43 @@ bool StructurizeImpl(Graph& graph) {
 	return StructureBreakRegions(graph);
 }
 
+// KYTY_CFG_CLONE_EXITS (CodegenOptions::cfg_clone_exits): gives every extra block entering a
+// small shared terminal block its own copy of it. Returns whether anything was copied.
+bool CloneSharedExitBlocks(Graph& graph) {
+	constexpr uint32_t MaxInstructions = 8;
+	bool               cloned          = false;
+	const auto         count           = graph.blocks.size();
+	for (size_t index = 0; index < count; index++) {
+		const auto exit = graph.blocks[index];
+		if (exit.terminator.kind != TerminatorKind::Return || !exit.successors.empty() ||
+		    exit.predecessors.size() < 2 || exit.inst_end - exit.inst_begin > MaxInstructions ||
+		    exit.id == graph.entry_block) {
+			continue;
+		}
+		for (size_t p = 1; p < exit.predecessors.size(); p++) {
+			auto* predecessor = graph.FindBlock(exit.predecessors[p]);
+			if (predecessor == nullptr || predecessor->terminator.kind == TerminatorKind::IndirectBranch) {
+				continue;
+			}
+			BasicBlock copy   = exit;
+			copy.id           = static_cast<uint32_t>(graph.blocks.size());
+			copy.predecessors = {predecessor->id};
+			copy.dominators.clear();
+			copy.post_dominators.clear();
+			const auto copy_id = copy.id;
+			ReplaceValue(predecessor->successors, exit.id, copy_id);
+			ReplaceTerminatorTarget(predecessor->terminator, exit.id, copy_id);
+			graph.blocks.push_back(std::move(copy));
+			cloned = true;
+		}
+	}
+	if (cloned) {
+		RebuildPredecessors(graph);
+		RecomputeAnalyses(graph);
+	}
+	return cloned;
+}
+
 } // namespace
 
 bool Structurize(Graph& graph) {
@@ -2327,6 +2430,16 @@ bool Structurize(Graph& graph) {
 		if (StructurizeImpl(structured)) {
 			graph = std::move(structured);
 			return true;
+		}
+	}
+	if (GetCodegenOptions().cfg_clone_exits && !graph.irreducible && !graph.unsupported) {
+		Graph cloned = graph;
+		if (CloneSharedExitBlocks(cloned)) {
+			structured = cloned;
+			if (StructurizeImpl(structured)) {
+				graph = std::move(structured);
+				return true;
+			}
 		}
 	}
 	SetFailure(graph, failure_kind, failure_block, failure_reason);

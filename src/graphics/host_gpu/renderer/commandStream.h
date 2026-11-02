@@ -85,6 +85,7 @@ enum class Op : uint16_t {
 	DrawIndexedIndirectCount,
 	Dispatch,
 	DispatchIndirect,
+	DispatchBase,
 	ResetQueryPool,
 	BeginQuery,
 	EndQuery,
@@ -93,6 +94,14 @@ enum class Op : uint16_t {
 	// vkUpdateDescriptorSets of one descriptor set (KYTY_RECORDER_DESCRIPTOR_SETS): a device call,
 	// not a command, replayed in stream order before the command that binds the set.
 	UpdateDescriptorSets,
+	// vkCmdWriteBufferMarkerAMD (KYTY_GPU_BREADCRUMBS, gpuBreadcrumbs.h).
+	WriteBufferMarker,
+	// Transfer clears (TextureCache::ClearImage).
+	ClearColorImage,
+	ClearDepthStencilImage,
+	// A host memcpy of guest bytes into mapped memory (KYTY_STREAM_COPY_DEFER, BufferCache): not a
+	// command; replayed in stream order, so before the Submit of the commands that read it.
+	HostCopy,
 	Count,
 };
 
@@ -309,6 +318,14 @@ struct Groups3Packet {
 	uint32_t y = 0;
 	uint32_t z = 0;
 };
+struct DispatchBasePacket {
+	uint32_t base_x = 0;
+	uint32_t base_y = 0;
+	uint32_t base_z = 0;
+	uint32_t x      = 0;
+	uint32_t y      = 0;
+	uint32_t z      = 0;
+};
 struct IndirectPacket {
 	vk::Buffer buffer     = nullptr;
 	uint64_t   offset     = 0;
@@ -350,6 +367,25 @@ struct WriteTimestampPacket {
 	vk::QueryPool pool  = nullptr;
 	uint64_t      stage = 0; // VkPipelineStageFlags2
 	uint32_t      query = 0;
+};
+struct HostCopyPacket {
+	uint64_t destination = 0; // host pointer (mapped stream ring)
+	uint64_t source      = 0; // guest virtual address
+	uint64_t size        = 0;
+};
+struct WriteBufferMarkerPacket {
+	vk::Buffer buffer = nullptr;
+	uint64_t   offset = 0;
+	uint32_t   stage  = 0; // VkPipelineStageFlagBits
+	uint32_t   marker = 0;
+};
+// ClearColorImage: value = the vk::ClearColorValue's 16 bytes. ClearDepthStencilImage: value[0] =
+// the depth's bits, value[1] = the stencil. vk::ImageSubresourceRange[count] follow.
+struct ClearImagePacket {
+	vk::Image       image  = nullptr;
+	vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+	uint32_t        count  = 0;
+	uint32_t        value[4] {};
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -447,6 +483,11 @@ uint64_t Value(Op op, uint64_t a, uint64_t b = 0, uint64_t c = 0, uint64_t d = 0
                uint64_t f = 0);
 uint64_t Floats(Op op, const float* values, uint32_t count);
 uint64_t ColorWriteEnable(uint32_t count, const vk::Bool32* enables);
+uint64_t ClearColorImage(vk::Image image, vk::ImageLayout layout, const vk::ClearColorValue& color,
+                         uint32_t count, const vk::ImageSubresourceRange* ranges);
+uint64_t ClearDepthStencilImage(vk::Image image, vk::ImageLayout layout,
+                                const vk::ClearDepthStencilValue& value, uint32_t count,
+                                const vk::ImageSubresourceRange* ranges);
 } // namespace VerifyHash
 
 // Order-sensitive fold of one packet into a command-buffer digest.
@@ -599,7 +640,8 @@ public:
 			case Op::DrawIndirectCount:
 			case Op::DrawIndexedIndirectCount:
 			case Op::Dispatch:
-			case Op::DispatchIndirect: return true;
+			case Op::DispatchIndirect:
+			case Op::DispatchBase: return true;
 			default: return false;
 		}
 	}
@@ -696,6 +738,8 @@ public:
 	                              vk::DeviceSize count_offset, uint32_t max_count, uint32_t stride);
 	void dispatch(uint32_t x, uint32_t y, uint32_t z);
 	void dispatchIndirect(vk::Buffer buffer, vk::DeviceSize offset);
+	void dispatchBase(uint32_t base_x, uint32_t base_y, uint32_t base_z, uint32_t x, uint32_t y,
+	                  uint32_t z);
 	void resetQueryPool(vk::QueryPool pool, uint32_t first, uint32_t count);
 	void beginQuery(vk::QueryPool pool, uint32_t query, vk::QueryControlFlags flags);
 	void endQuery(vk::QueryPool pool, uint32_t query);
@@ -703,6 +747,14 @@ public:
 	                          vk::Buffer destination, vk::DeviceSize offset, vk::DeviceSize stride,
 	                          vk::QueryResultFlags flags);
 	void writeTimestamp2(vk::PipelineStageFlags2 stage, vk::QueryPool pool, uint32_t query);
+	void hostCopy(void* destination, uint64_t source, uint64_t size);
+	void writeBufferMarkerAMD(vk::PipelineStageFlagBits stage, vk::Buffer buffer, vk::DeviceSize offset,
+	                          uint32_t marker);
+	void clearColorImage(vk::Image image, vk::ImageLayout layout, const vk::ClearColorValue* color,
+	                     uint32_t count, const vk::ImageSubresourceRange* ranges);
+	void clearDepthStencilImage(vk::Image image, vk::ImageLayout layout,
+	                            const vk::ClearDepthStencilValue* value, uint32_t count,
+	                            const vk::ImageSubresourceRange* ranges);
 
 private:
 	class Writer;

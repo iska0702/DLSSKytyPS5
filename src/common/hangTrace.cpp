@@ -1235,6 +1235,7 @@ void Initialize() {
 	                           "t_ms,queue,starts,wait_avg_us,wait_max_us,busy_us,slices,incomplete");
 
 	g_publisher = std::jthread([](std::stop_token stop) {
+		Common::PlaceCurrentThreadCold();
 		std::unique_lock lock(g_publish_mutex);
 		while (!stop.stop_requested()) {
 			g_publish_condition.wait_for(lock, stop, std::chrono::seconds(1),
@@ -1879,6 +1880,22 @@ void RecordDoneWait(uint64_t wait_ns) {
 
 void RecordFlip() {
 	HangWatchdog::NoteFlip();
+	// KYTY_FRAME_TIMES_LOG=<file> (default off, independent of the hang trace): one line per guest
+	// flip, "t_us,interval_us" (present-thread clock), for frame-time percentiles and stutter counts.
+	static FILE* frame_log = [] {
+		const auto* path = std::getenv("KYTY_FRAME_TIMES_LOG");
+		return path != nullptr && path[0] != 0 ? std::fopen(path, "w") : nullptr;
+	}();
+	if (frame_log != nullptr) {
+		static uint64_t previous = 0;
+		const auto      now      = NowNs();
+		if (previous != 0) {
+			std::fprintf(frame_log, "%" PRIu64 ",%" PRIu64 "\n", now / 1000u, (now - previous) / 1000u);
+			static uint32_t lines = 0;
+			if ((++lines & 63u) == 0) std::fflush(frame_log);
+		}
+		previous = now;
+	}
 	if (!Enabled()) {
 		return;
 	}

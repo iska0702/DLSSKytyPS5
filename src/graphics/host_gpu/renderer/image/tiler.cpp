@@ -27,7 +27,7 @@
 #include "gpu_tiler_shaders/gpu_tiler_standard4_spv.h"
 #include "gpu_tiler_shaders/gpu_tiler_standard64_3d_spv.h"
 #include "gpu_tiler_shaders/gpu_tiler_standard64_spv.h"
-#include "gpu_tiler_shaders/gpu_tiler_swap_bgra16_spv.h"
+#include "gpu_tiler_shaders/gpu_tiler_color_transform_spv.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/memoryStats.h"
 #include "graphics/host_gpu/renderer/cache/streamBuffer.h"
@@ -57,7 +57,7 @@ TileManager::TileManager(GraphicContext& graphics, CommandScheduler& scheduler,
                          StreamBuffer& stream_buffer)
     : m_graphics(graphics), m_scheduler(scheduler), m_stream_buffer(stream_buffer) {
 	static_assert(FamilyCount == 9);
-	static_assert(sizeof(Push) == 64);
+	static_assert(sizeof(Push) == 72);
 	std::array<vk::DescriptorSetLayoutBinding, 3> bindings {};
 	for (uint32_t index = 0; index < 2; index++) {
 		bindings[index] = {index, vk::DescriptorType::eStorageBuffer, 1,
@@ -142,8 +142,8 @@ TileManager::~TileManager() {
 	if (m_d32_to_d16 != nullptr) {
 		m_graphics.device.destroyPipeline(m_d32_to_d16, nullptr);
 	}
-	if (m_swap_bgra16 != nullptr) {
-		m_graphics.device.destroyPipeline(m_swap_bgra16, nullptr);
+	if (m_color_transform != nullptr) {
+		m_graphics.device.destroyPipeline(m_color_transform, nullptr);
 	}
 	if (m_pipeline_layout != nullptr) {
 		m_graphics.device.destroyPipelineLayout(m_pipeline_layout, nullptr);
@@ -194,7 +194,10 @@ TileManager::Scratch TileManager::AllocateScratch(uint64_t size) {
 	auto result = vmaCreateBuffer(m_graphics.allocator, &raw, &allocate, &buffer, &memory, nullptr);
 	if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
 		// VRAM ran short (cards with less memory): the pool holds only buffers whose GPU work has
-		// completed, so free all of them and retry once before giving up.
+		// completed, so free all of them and retry once before giving up. That holds because a
+		// buffer enters the pool only from ReleaseScratch, which runs once the tick of its last use
+		// completed (DeferRelease; callers that use a buffer across a possible submission hold a
+		// ScratchHold, so its release is stamped after that use). Held buffers are not in the pool.
 		std::vector<Scratch> idle;
 		{
 			std::scoped_lock lock(m_scratch_mutex);
@@ -255,6 +258,39 @@ void TileManager::TrimScratchPool() {
 }
 
 void TileManager::DeferDestroy(Scratch scratch) {
+	{
+		std::scoped_lock lock(m_hold_mutex);
+		if (m_hold_depth != 0) {
+			// A ScratchHold is open: its caller may still use the buffer in a later tick.
+			m_held.push_back(scratch);
+			return;
+		}
+	}
+	DeferRelease(scratch);
+}
+
+void TileManager::BeginScratchHold() {
+	std::scoped_lock lock(m_hold_mutex);
+	m_hold_depth++;
+}
+
+void TileManager::EndScratchHold() {
+	std::vector<Scratch> held;
+	{
+		std::scoped_lock lock(m_hold_mutex);
+		EXIT_IF(m_hold_depth == 0);
+		if (--m_hold_depth != 0) {
+			return;
+		}
+		held.swap(m_held);
+	}
+	// Every command using these buffers was recorded in this tick or an earlier one.
+	for (const auto& scratch: held) {
+		DeferRelease(scratch);
+	}
+}
+
+void TileManager::DeferRelease(Scratch scratch) {
 	if (m_scratch_pool_limit != 0) {
 		// Runs once the scheduler tick that uses the buffer has completed.
 		m_scheduler.DeferOperation([this, scratch] { ReleaseScratch(scratch); });
@@ -295,9 +331,11 @@ void TileManager::Prepare(bool tile, uint64_t tiled_capacity, uint64_t linear_ca
                           std::span<const GpuTileInfo> infos, uint64_t source_base,
                           uint64_t target_base, std::vector<Dispatch>& dispatches,
                           std::span<const vk::BufferImageCopy> image_regions,
-                          uint32_t image_texel, bool image_layer_views) {
+                          uint32_t image_texel, bool image_layer_views, ColorTransform transform) {
+	// The image variants move raw texels: their callers take the buffer path for transforms.
 	EXIT_IF(infos.empty() || tiled_capacity == 0 || linear_capacity == 0 ||
-	        (!image_regions.empty() && image_regions.size() != infos.size()));
+	        (!image_regions.empty() && image_regions.size() != infos.size()) ||
+	        (!image_regions.empty() && transform != ColorTransform::None));
 	const auto& limits = m_graphics.GetPhysicalDeviceProperties().limits;
 	EXIT_NOT_IMPLEMENTED(tiled_capacity > UINT32_MAX || linear_capacity > UINT32_MAX);
 
@@ -314,6 +352,8 @@ void TileManager::Prepare(bool tile, uint64_t tiled_capacity, uint64_t linear_ca
 	dispatches.clear();
 	dispatches.reserve(infos.size());
 	for (const auto& info: infos) {
+		EXIT_IF((transform == ColorTransform::SwapBgra16 && info.bytes_per_element != 8u) ||
+		        (transform == ColorTransform::Reverse10_11_11 && info.bytes_per_element != 4u));
 		TileBlockLayout block {};
 		const uint32_t  tiled_width  = info.tiled_width != 0 ? info.tiled_width : info.pitch;
 		const uint32_t  tiled_height = info.tiled_height != 0 ? info.tiled_height : info.height;
@@ -399,6 +439,7 @@ void TileManager::Prepare(bool tile, uint64_t tiled_capacity, uint64_t linear_ca
 		dispatch.push.tail_x           = info.tail_x;
 		dispatch.push.tail_y           = info.tail_y;
 		dispatch.push.tail             = info.tail;
+		dispatch.push.color_transform  = static_cast<uint32_t>(transform);
 		if (!image_regions.empty()) {
 			// Image variants: element (x, y) of this tile is view texel imageOffset / texel +
 			// (x, y) of the region's layer (ImageTransferEligible admits only 2D regions that
@@ -488,7 +529,7 @@ void TileManager::Record(vk::Buffer source, uint64_t source_offset,
 	                     target_capacity % 4 != 0);
 
 	m_scheduler.EndRendering();
-	auto                    command = m_scheduler.Current().Handle();
+	const auto              command = m_scheduler.Current().HelperSink();
 	vk::BufferMemoryBarrier barriers[3] {};
 	barriers[0].srcAccessMask = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eHostWrite;
 	barriers[0].dstAccessMask = vk::AccessFlagBits::eShaderRead;
@@ -555,14 +596,16 @@ void TileManager::Record(vk::Buffer source, uint64_t source_offset,
 
 TileManager::Result TileManager::Detile(vk::Buffer tiled, uint64_t tiled_offset,
                                         uint64_t tiled_capacity, uint64_t linear_capacity,
-                                        std::span<const GpuTileInfo> infos) {
+                                        std::span<const GpuTileInfo> infos,
+                                        ColorTransform transform) {
 	KYTY_GPU_OP_SITE("tiler.detile");
 	const auto&    limits = m_graphics.GetPhysicalDeviceProperties().limits;
 	const uint64_t descriptor_alignment =
 	    std::max<uint64_t>(limits.minStorageBufferOffsetAlignment, 4);
 	const uint64_t        source_base = tiled_offset & (descriptor_alignment - 1);
 	std::vector<Dispatch> dispatches;
-	Prepare(false, tiled_capacity, linear_capacity, infos, source_base, 0, dispatches);
+	Prepare(false, tiled_capacity, linear_capacity, infos, source_base, 0, dispatches, {}, 1, false,
+	        transform);
 	auto scratch = AllocateScratch(Common::AlignUp(linear_capacity, 4));
 	DeferDestroy(scratch);
 	Record(tiled, tiled_offset, tiled_capacity, scratch.buffer, 0, scratch.size, dispatches,
@@ -597,16 +640,14 @@ void TileManager::TileImage(Image& image, std::span<const vk::BufferImageCopy> r
 	const uint64_t        target_base = tiled_offset & (descriptor_alignment - 1);
 	std::vector<Dispatch> dispatches;
 	// Reserve all stream parameters before creating a scheduler-lived scratch dependency:
-	// StreamBuffer::Map is allowed to submit the current tick when it wraps.
-	Prepare(true, tiled_capacity, linear_capacity, infos, 0, target_base, dispatches);
+	// StreamBuffer::Map is allowed to submit the current tick when it wraps. The tiling pass
+	// applies the colour transform.
+	Prepare(true, tiled_capacity, linear_capacity, infos, 0, target_base, dispatches, {}, 1, false,
+	        transform);
 	auto linear = AllocateScratch(Common::AlignUp(linear_capacity, 4));
 	DeferDestroy(linear);
 	image.Download(regions, linear.buffer, 0, linear.size);
-	Result source {linear.buffer, 0, linear.size};
-	if (transform == ColorTransform::SwapBgra16) {
-		source = SwapBgra16(source);
-	}
-	Record(source.buffer, source.offset, linear_capacity, tiled, tiled_offset, tiled_capacity,
+	Record(linear.buffer, 0, linear_capacity, tiled, tiled_offset, tiled_capacity,
 	       dispatches, false);
 }
 
@@ -982,7 +1023,7 @@ void TileManager::RecordImage(Image& image, bool load, vk::Buffer tiled, uint64_
 	}
 
 	m_scheduler.EndRendering();
-	auto command = m_scheduler.Current().Handle();
+	const auto command = m_scheduler.Current().HelperSink();
 	// Before: the tiled bytes (possibly host-written staging) and the parameters are visible
 	// to the dispatches; the image is in GENERAL for storage access, ordered after every
 	// earlier access (Image::GetBarriers).
@@ -1063,7 +1104,7 @@ void TileManager::RecordImage(Image& image, bool load, vk::Buffer tiled, uint64_
 	image.NoteContentWrite();
 	image.Transit(vk::ImageLayout::eGeneral,
 	              vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {},
-	              command);
+	              command.Identity());
 }
 
 bool TileManager::DetileToImage(Image& image, vk::Buffer tiled, uint64_t tiled_offset,
@@ -1284,7 +1325,7 @@ void TileManager::ConvertD16(Result source, Result target, D16Direction directio
 	EXIT_IF(source.size < source_barrier_size || target.size < target_barrier_size);
 
 	m_scheduler.EndRendering();
-	auto                    command = m_scheduler.Current().Handle();
+	const auto              command = m_scheduler.Current().HelperSink();
 	vk::BufferMemoryBarrier barriers[2] {};
 	barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 	barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -1375,10 +1416,21 @@ void TileManager::ConvertD16(Result source, Result target, D16Direction directio
 	                        &barriers[1], 0, nullptr);
 }
 
-void TileManager::SwapBgra16(Result input, Result output, uint32_t pixels) {
-	KYTY_GPU_OP_SITE("tiler.swap_bgra16");
-	if (m_swap_bgra16 == nullptr) {
-		const auto module = CompileSPV(GPU_TILER_SWAP_BGRA16_SPV, m_graphics.device);
+void TileManager::TransformColor(Result input, Result output, ColorTransform transform,
+                                 bool to_host) {
+	KYTY_GPU_OP_SITE("tiler.color_transform");
+	uint32_t element_bytes = 0;
+	switch (transform) {
+		case ColorTransform::SwapBgra16: element_bytes = 8; break;
+		case ColorTransform::Reverse10_11_11: element_bytes = 4; break;
+		default: EXIT("invalid color transform\n");
+	}
+	EXIT_IF(input.size == 0 || input.size % element_bytes != 0 ||
+	        input.size / element_bytes > UINT32_MAX ||
+	        output.size < input.size);
+	const auto pixels = static_cast<uint32_t>(input.size / element_bytes);
+	if (m_color_transform == nullptr) {
+		const auto module = CompileSPV(GPU_TILER_COLOR_TRANSFORM_SPV, m_graphics.device);
 		vk::PipelineShaderStageCreateInfo stage {};
 		stage.stage  = vk::ShaderStageFlagBits::eCompute;
 		stage.module = module;
@@ -1387,14 +1439,12 @@ void TileManager::SwapBgra16(Result input, Result output, uint32_t pixels) {
 		create.stage  = stage;
 		create.layout = m_pipeline_layout;
 		const auto result =
-		    m_graphics.device.createComputePipelines(nullptr, 1, &create, nullptr, &m_swap_bgra16);
+		    m_graphics.device.createComputePipelines(nullptr, 1, &create, nullptr, &m_color_transform);
 		m_graphics.device.destroyShaderModule(module, nullptr);
-		RequireVulkanSuccess(result, "create BGRA16 swap pipeline");
+		RequireVulkanSuccess(result, "create color transform pipeline");
 	}
-	const uint64_t bytes = static_cast<uint64_t>(pixels) * 8u;
-	EXIT_IF(pixels == 0);
-	const auto input_binding  = BindStorage(input, bytes);
-	const auto output_binding = BindStorage(output, bytes);
+	const auto input_binding  = BindStorage(input, input.size);
+	const auto output_binding = BindStorage(output, input.size);
 
 	const vk::DescriptorBufferInfo infos[] {
 	    input_binding.info,
@@ -1421,17 +1471,19 @@ void TileManager::SwapBgra16(Result input, Result output, uint32_t pixels) {
 	barriers[1].srcAccessMask = vk::AccessFlagBits::eMemoryRead;
 	barriers[1].dstAccessMask = vk::AccessFlagBits::eShaderWrite;
 	m_scheduler.EndRendering();
-	auto command = m_scheduler.Current().Handle();
+	const auto command = m_scheduler.Current().HelperSink();
 	command.pipelineBarrier(
 	    vk::PipelineStageFlagBits::eAllCommands | vk::PipelineStageFlagBits::eHost,
 	    vk::PipelineStageFlagBits::eComputeShader, {}, 0, nullptr, 2, barriers, 0, nullptr);
-	m_scheduler.Current().BindPipeline(vk::PipelineBindPoint::eCompute, m_swap_bgra16);
+	m_scheduler.Current().BindPipeline(vk::PipelineBindPoint::eCompute, m_color_transform);
 	m_scheduler.Current().PushDescriptors(vk::PipelineBindPoint::eCompute, m_pipeline_layout, 0,
 	                             static_cast<uint32_t>(writes.size()), writes.data());
 	Push push {};
-	push.src_base = input_binding.base;
-	push.dst_base = output_binding.base;
-	push.width    = pixels;
+	push.src_base        = input_binding.base;
+	push.dst_base        = output_binding.base;
+	push.width           = pixels;
+	push.color_transform = static_cast<uint32_t>(transform);
+	push.to_host         = to_host;
 	command.pushConstants(m_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push),
 	                      &push);
 	command.dispatch((pixels + 63u) / 64u, 1, 1);
@@ -1442,19 +1494,14 @@ void TileManager::SwapBgra16(Result input, Result output, uint32_t pixels) {
 	                        0, nullptr);
 }
 
-TileManager::Result TileManager::SwapBgra16(Result input) {
-	EXIT_NOT_IMPLEMENTED(input.size == 0 || input.size % 8u != 0 || input.size / 8u > UINT32_MAX);
+TileManager::Result TileManager::TransformColor(Result input, ColorTransform transform,
+                                                bool to_host) {
+	EXIT_NOT_IMPLEMENTED(input.size == 0);
 	auto output = AllocateScratch(input.size);
 	DeferDestroy(output);
 	Result result {output.buffer, 0, output.size};
-	SwapBgra16(input, result, static_cast<uint32_t>(input.size / 8u));
+	TransformColor(input, result, transform, to_host);
 	return result;
-}
-
-void TileManager::SwapBgra16(Result input, Result output) {
-	EXIT_NOT_IMPLEMENTED(input.size == 0 || input.size % 8u != 0 || input.size / 8u > UINT32_MAX ||
-	                     output.size < input.size);
-	SwapBgra16(input, output, static_cast<uint32_t>(input.size / 8u));
 }
 
 } // namespace Libs::Graphics

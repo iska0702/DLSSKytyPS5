@@ -187,7 +187,7 @@ void LodStatsCounter::Report(uint64_t destination, uint32_t size, uint32_t contr
 		                                              m_completed.load(std::memory_order_acquire)});
 	}
 
-	auto native = scheduler.Current().Handle();
+	auto native = scheduler.Current().HelperSink();
 
 	vk::MemoryBarrier barrier {};
 	barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite;
@@ -208,7 +208,7 @@ void LodStatsCounter::Report(uint64_t destination, uint32_t size, uint32_t contr
 		}
 		slot_offset = uint64_t {slot} * PublishSlotSize;
 		// The wait above may have finished the recording; record into the current one.
-		native = scheduler.Current().Handle();
+		native = scheduler.Current().HelperSink();
 		const vk::BufferCopy copy {0, slot_offset, CounterBytes};
 		native.copyBuffer(counters.Handle(), m_publish->Handle(), 1, &copy);
 	}

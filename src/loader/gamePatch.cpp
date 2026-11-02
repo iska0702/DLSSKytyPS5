@@ -489,6 +489,50 @@ bool ApplyPending(Program* program) {
 	return true;
 }
 
+void ApplyBuiltin(Program* main_program) {
+	if (main_program == nullptr || main_program->elf == nullptr || main_program->elf->IsShared()) {
+		return;
+	}
+	// KYTY_ASTRO_CB_SCALE=<1-4> (default 2; 1 = off): Astro Bot (PPSA21567 01.018.000) sizes its
+	// five draw threads' command buffers {7, 7, 4, 4, 6} MiB (table at 0x8491510, read by
+	// sub_4A38C0); running out is its "too many objects/batches in this scene" assert (Bug C). In
+	// speedrun_inflator the Draw Geometry thread's frame is mostly mesh-deformer dispatches with
+	// inline bone palettes (22-48 KiB each, ~5.7 MiB per frame). When that thread falls a frame
+	// behind (game threads short of CPU, or blocked on reads of GPU-written memory), one buffer
+	// takes two frames' work: 11.4-12.1 MiB, measured flat at that ceiling also with the game on
+	// 16 logical processors. The table is scaled before the game runs.
+	int scale = 2;
+	if (const auto* value = std::getenv("KYTY_ASTRO_CB_SCALE"); value != nullptr) {
+		scale = std::clamp(std::atoi(value), 1, 4);
+	}
+	if (scale == 1) {
+		return;
+	}
+	std::string title_id;
+	std::string version;
+	if (!SystemContentParamSfoGetString("TITLE_ID", &title_id) ||
+	    !SystemContentParamSfoGetString("APP_VER", &version) || title_id != "PPSA21567" ||
+	    version != "01.018.000") {
+		return;
+	}
+	static constexpr uint64_t kTable     = 0x8491510;
+	static constexpr uint32_t kSizes[5]  = {7, 7, 4, 4, 6};
+	const auto                address    = main_program->base_vaddr + kTable;
+	if (!IsInsideProgram(*main_program, address, sizeof(kSizes)) ||
+	    std::memcmp(reinterpret_cast<const void*>(address), kSizes, sizeof(kSizes)) != 0) {
+		::printf("Game patch: Astro Bot command buffer table not found (KYTY_ASTRO_CB_SCALE)\n");
+		return;
+	}
+	uint32_t scaled[5] {};
+	for (int i = 0; i < 5; i++) {
+		scaled[i] = kSizes[i] * static_cast<uint32_t>(scale);
+	}
+	std::memcpy(reinterpret_cast<void*>(address), scaled, sizeof(scaled));
+	::printf("Game patch: Astro Bot draw-thread command buffers x%d (%u, %u, %u, %u, %u MiB; "
+	         "KYTY_ASTRO_CB_SCALE)\n",
+	         scale, scaled[0], scaled[1], scaled[2], scaled[3], scaled[4]);
+}
+
 void Clear() {
 	if (g_pending_plan != nullptr) {
 		ReleaseCaves(&g_pending_plan->cave_pages);

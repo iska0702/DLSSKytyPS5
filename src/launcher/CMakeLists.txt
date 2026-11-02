@@ -1,5 +1,6 @@
 
-find_package(Qt6 COMPONENTS Concurrent Network Widgets REQUIRED)
+find_package(Qt6 6.8 COMPONENTS Concurrent Network Widgets REQUIRED)
+add_subdirectory("${KYTY_SOURCE_DIR}/updater" "${CMAKE_CURRENT_BINARY_DIR}/updater")
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS forms)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -20,7 +21,8 @@ add_executable(launcher WIN32
 )
 
 
-target_link_libraries(launcher Qt6::Concurrent Qt6::Network Qt6::Widgets Vulkan::Headers SDL3::SDL3-static kyty_git_version common)
+target_link_libraries(launcher Qt6::Concurrent Qt6::Network Qt6::Widgets Vulkan::Headers SDL3::SDL3-static
+	LibAtrac9 kyty_git_version common)
 if(LINUX)
 	find_package(Qt6 COMPONENTS DBus REQUIRED)
 	target_link_libraries(launcher Qt6::DBus)
@@ -42,7 +44,13 @@ elseif(LINUX)
 	set_target_properties(launcher PROPERTIES LINK_FLAGS "${KYTY_LD_OPTIONS}")
 endif()
 
-add_dependencies(launcher kyty_emulator)
+add_custom_target(stage_updater
+	COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:launcher>
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:kyty_updater>
+		$<TARGET_FILE_DIR:launcher>/$<TARGET_FILE_NAME:kyty_updater>
+	DEPENDS kyty_updater
+	VERBATIM)
+add_dependencies(launcher kyty_emulator stage_updater)
 
 if(KYTY_CLANG_CL)
 	add_custom_command(TARGET launcher POST_BUILD
@@ -103,7 +111,7 @@ if(WIN32)
 	)
 endif()
 
-set(launcher_name "launcher")
+set(launcher_name "kyty_launcher")
 if(APPLE)
 	set(launcher_name "KytyPS5")
 endif()
@@ -128,9 +136,21 @@ install(TARGETS launcher
 	BUNDLE DESTINATION .
 	RUNTIME DESTINATION .)
 
+if(NOT APPLE AND KYTY_BUILD_ORIGIN STREQUAL "Official")
+	# Older releases require the previous executable name when validating updates. Only Official
+	# builds self-update; other builds ship kyty_launcher alone (no second copy under the old name).
+	install(CODE "
+		file(INSTALL DESTINATION \"\${CMAKE_INSTALL_PREFIX}\"
+			TYPE PROGRAM RENAME \"launcher${CMAKE_EXECUTABLE_SUFFIX}\"
+			FILES \"\${CMAKE_INSTALL_PREFIX}/${launcher_name}${CMAKE_EXECUTABLE_SUFFIX}\")
+	")
+endif()
+
 if(APPLE)
 	install(TARGETS kyty_emulator DESTINATION "KytyPS5.app/Contents/MacOS")
+	install(TARGETS kyty_updater DESTINATION "KytyPS5.app/Contents/MacOS")
 	install(FILES "${KYTY_TROPHY_UNLOCK_SOUND}" DESTINATION "KytyPS5.app/Contents/Resources/assets/sounds")
+	install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/cursors" DESTINATION "KytyPS5.app/Contents/Resources/assets")
 	# Deploy and ad-hoc sign the Qt frameworks and plugins in the bundle.
 	find_program(KYTY_MACDEPLOYQT NAMES macdeployqt PATHS "${Qt6_DIR}/../../../bin" NO_DEFAULT_PATH)
 	if(NOT KYTY_MACDEPLOYQT)
@@ -144,6 +164,10 @@ if(APPLE)
 			message(FATAL_ERROR \"macdeployqt failed with \${_kyty_deploy_result}\")
 		endif()
 	")
+endif()
+
+if(NOT APPLE)
+	install(TARGETS kyty_updater RUNTIME DESTINATION .)
 endif()
 
 if(WIN32)
@@ -190,8 +214,14 @@ elseif(LINUX)
 				file(GLOB kyty_qt_plugin_group
 					"${kyty_qt_plugins_dir}/${kyty_qt_plugin}/*.so"
 					"${kyty_qt_plugins_dir}/${kyty_qt_plugin}/*.so.*")
+				if(kyty_qt_plugin STREQUAL "imageformats")
+					# Distribution plugin directories also contain KDE's kimg_* add-ons.
+					# Ship Qt's own plugins, matching the official Qt SDK layout, rather
+					# than pulling optional KDE codec dependencies into the launcher.
+					list(FILTER kyty_qt_plugin_group INCLUDE REGEX "/libq[^/]+\\.so(\\..*)?$")
+				endif()
 				list(APPEND kyty_qt_plugin_files ${kyty_qt_plugin_group})
-				install(DIRECTORY "${kyty_qt_plugins_dir}/${kyty_qt_plugin}" DESTINATION "plugins")
+				install(FILES ${kyty_qt_plugin_group} DESTINATION "plugins/${kyty_qt_plugin}")
 			endif()
 		endforeach()
 		install(CODE "

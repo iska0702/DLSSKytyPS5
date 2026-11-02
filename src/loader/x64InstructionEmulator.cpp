@@ -15,6 +15,7 @@
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 #include <windows.h> // IWYU pragma: keep
 #elif defined(__APPLE__)
+#include <sched.h>
 #include <sys/ucontext.h>
 #else
 #include <sched.h>
@@ -471,6 +472,16 @@ struct Context {
 			default: return nullptr;
 		}
 	}
+	// The kernel hands AVX threads the longer context that carries YMM[255:128]; a plain SSE
+	// context has no such state to clear.
+	void ClearUpperYmm(uint8_t index) const {
+		if (index >= 16 || native->uc_mcsize < sizeof(_STRUCT_MCONTEXT_AVX64)) {
+			return;
+		}
+		auto* avx = reinterpret_cast<_STRUCT_MCONTEXT_AVX64*>(native->uc_mcontext);
+		auto* ymmh = &avx->__fs.__fpu_ymmh0;
+		ymmh[index] = {};
+	}
 #else
 	ucontext_t* native;
 
@@ -629,12 +640,14 @@ static bool TryEmulateSse4a(Context& context) {
 		index  = rip[offset + 4];
 		instruction_length += 2;
 	}
+	// The manual leaves bits 127:64 undefined for both; AMD CPUs zero them (measured on Zen 4 by
+	// amd_cpu_emulation_tests, as is the clamping of length + index > 64 above).
 	if (prefix == 0x66) {
 		dest[0] = ExtractBitField(dest[0], length, index);
-		dest[1] = 0;
 	} else {
 		dest[0] = InsertBitField(dest[0], source[0], length, index);
 	}
+	dest[1] = 0;
 	std::memcpy(dest_xmm, dest, sizeof(dest));
 	context.Advance(instruction_length);
 	return true;
@@ -705,8 +718,6 @@ static bool TryEmulateCpuExtensions(Context& context) {
 	context.Advance(instruction.length);
 	return true;
 }
-
-#if !defined(__APPLE__)
 
 static bool TryEmulateMonitorxMwaitx(Context& context) {
 	const auto* rip = reinterpret_cast<const uint8_t*>(context.Rip());
@@ -823,48 +834,225 @@ static bool TryEmulateReciprocalSquareRoot(Context& context) {
 	return true;
 }
 
-#endif
-
 void ConfigureReciprocalSqrtStats() {
-#if !defined(__APPLE__)
 	if (const char* timing = std::getenv("KYTY_AMD_CPU_TIMING"); timing != nullptr) {
 		g_rsqrt_timing.store(std::strcmp(timing, "1") == 0, std::memory_order_relaxed);
 	}
-#endif
 }
 
 ReciprocalSqrtStats GetReciprocalSqrtStats() {
 	ReciprocalSqrtStats stats;
-#if !defined(__APPLE__)
 	for (const auto& slot: g_rsqrt_slots) {
 		stats.traps += slot.traps.load(std::memory_order_relaxed);
 		stats.emulate_ns += slot.ns.load(std::memory_order_relaxed);
 	}
-#endif
 	return stats;
 }
 
-bool TryEmulate(void* native_context) {
+std::string HostCpuVendor() {
+	uint32_t eax = 0;
+	uint32_t ebx = 0;
+	uint32_t ecx = 0;
+	uint32_t edx = 0;
+	__cpuid(0, eax, ebx, ecx, edx);
+	char vendor[12];
+	std::memcpy(vendor, &ebx, 4);
+	std::memcpy(vendor + 4, &edx, 4);
+	std::memcpy(vendor + 8, &ecx, 4);
+	return {vendor, sizeof(vendor)};
+}
+
+bool IsAmdCpuVendor(std::string_view vendor) {
+	// Hygon's Dhyana is a licensed Zen design with AMD's instruction behaviour.
+	return vendor == "AuthenticAMD" || vendor == "HygonGenuine";
+}
+
+static bool MakeContext(void* native_context, Context& context) {
 	if (native_context == nullptr) {
 		return false;
 	}
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
-	Context context {static_cast<PCONTEXT>(native_context)};
+	context = Context {static_cast<PCONTEXT>(native_context)};
 #elif defined(__APPLE__)
 	auto* saved_context = static_cast<ucontext_t*>(native_context);
 	if (saved_context->uc_mcontext == nullptr) {
 		return false;
 	}
-	Context context {saved_context};
+	context = Context {saved_context};
 #else
-	Context context {static_cast<ucontext_t*>(native_context)};
+	context = Context {static_cast<ucontext_t*>(native_context)};
 #endif
-#if !defined(__APPLE__)
+	return true;
+}
+
+namespace {
+
+enum GuestLoadKind : uint8_t {
+	LoadGpr   = 1, // MOV r, m: 32-bit destinations zero the upper half, 8/16-bit ones merge
+	LoadGprZx = 2, // MOVZX
+	LoadGprSx = 3, // MOVSX, MOVSXD
+	LoadXmm   = 4, // the low `size` bytes of an XMM register, the rest of its 128 bits zeroed
+};
+
+} // namespace
+
+bool DecodeGuestLoad(void* native_context, uint64_t fault_vaddr, GuestLoad::Load& load) {
+	Context context {};
+	if (!MakeContext(native_context, context)) {
+		return false;
+	}
+	ZydisDecoder            decoder {};
+	ZydisDecodedInstruction instruction {};
+	ZydisDecodedOperand     operands[ZYDIS_MAX_OPERAND_COUNT] {};
+	if (!ZYAN_SUCCESS(
+	        ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64)) ||
+	    !ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, reinterpret_cast<const void*>(context.Rip()),
+	                                         ZYDIS_MAX_INSTRUCTION_LENGTH, &instruction, operands))) {
+		return false;
+	}
+	if (instruction.operand_count_visible != 2 || (instruction.attributes & ZYDIS_ATTRIB_HAS_LOCK) != 0 ||
+	    (instruction.encoding != ZYDIS_INSTRUCTION_ENCODING_LEGACY &&
+	     instruction.encoding != ZYDIS_INSTRUCTION_ENCODING_VEX)) {
+		return false;
+	}
+	const auto& dest   = operands[0];
+	const auto& source = operands[1];
+	if (dest.type != ZYDIS_OPERAND_TYPE_REGISTER || source.type != ZYDIS_OPERAND_TYPE_MEMORY ||
+	    source.mem.type != ZYDIS_MEMOP_TYPE_MEM || source.mem.segment == ZYDIS_REGISTER_FS ||
+	    source.mem.segment == ZYDIS_REGISTER_GS) {
+		return false;
+	}
+	const bool     vex        = instruction.encoding == ZYDIS_INSTRUCTION_ENCODING_VEX;
+	const auto     reg_class  = ZydisRegisterGetClass(dest.reg.value);
+	const auto     index      = ZydisRegisterGetId(dest.reg.value);
+	const uint32_t mem_bytes  = source.size / 8u;
+	const uint32_t dest_bytes = dest.size / 8u;
+	const bool     gpr        = reg_class == ZYDIS_REGCLASS_GPR8 || reg_class == ZYDIS_REGCLASS_GPR16 ||
+	                 reg_class == ZYDIS_REGCLASS_GPR32 || reg_class == ZYDIS_REGCLASS_GPR64;
+	if (index < 0 || index >= 16 || mem_bytes == 0 || mem_bytes > 16) {
+		return false;
+	}
+	// The high-byte registers (AH, CH, DH, BH) are not the low byte of their register index.
+	if (dest.reg.value == ZYDIS_REGISTER_AH || dest.reg.value == ZYDIS_REGISTER_CH ||
+	    dest.reg.value == ZYDIS_REGISTER_DH || dest.reg.value == ZYDIS_REGISTER_BH) {
+		return false;
+	}
+	uint8_t kind = 0;
+	switch (instruction.mnemonic) {
+		case ZYDIS_MNEMONIC_MOV:
+			kind = gpr && !vex && mem_bytes == dest_bytes ? LoadGpr : 0;
+			break;
+		case ZYDIS_MNEMONIC_MOVZX: kind = gpr && mem_bytes < dest_bytes ? LoadGprZx : 0; break;
+		case ZYDIS_MNEMONIC_MOVSX:
+		case ZYDIS_MNEMONIC_MOVSXD: kind = gpr && mem_bytes <= dest_bytes ? LoadGprSx : 0; break;
+		case ZYDIS_MNEMONIC_MOVSS:
+		case ZYDIS_MNEMONIC_VMOVSS:
+		case ZYDIS_MNEMONIC_MOVSD:
+		case ZYDIS_MNEMONIC_VMOVSD:
+		case ZYDIS_MNEMONIC_MOVD:
+		case ZYDIS_MNEMONIC_VMOVD:
+		case ZYDIS_MNEMONIC_MOVQ:
+		case ZYDIS_MNEMONIC_VMOVQ:
+			kind = reg_class == ZYDIS_REGCLASS_XMM && (mem_bytes == 4 || mem_bytes == 8) ? LoadXmm : 0;
+			break;
+		case ZYDIS_MNEMONIC_MOVUPS:
+		case ZYDIS_MNEMONIC_VMOVUPS:
+		case ZYDIS_MNEMONIC_MOVAPS:
+		case ZYDIS_MNEMONIC_VMOVAPS:
+		case ZYDIS_MNEMONIC_MOVUPD:
+		case ZYDIS_MNEMONIC_VMOVUPD:
+		case ZYDIS_MNEMONIC_MOVAPD:
+		case ZYDIS_MNEMONIC_VMOVAPD:
+		case ZYDIS_MNEMONIC_MOVDQU:
+		case ZYDIS_MNEMONIC_VMOVDQU:
+		case ZYDIS_MNEMONIC_MOVDQA:
+		case ZYDIS_MNEMONIC_VMOVDQA:
+		case ZYDIS_MNEMONIC_LDDQU:
+		case ZYDIS_MNEMONIC_VLDDQU:
+			kind = reg_class == ZYDIS_REGCLASS_XMM && mem_bytes == 16 ? LoadXmm : 0;
+			break;
+		default: break;
+	}
+	if (kind == 0) {
+		return false;
+	}
+	ZydisRegisterContext registers {};
+	for (uint8_t i = 0; i < 16; ++i) {
+		const auto value                         = static_cast<uint64_t>(context.Gpr(i));
+		registers.values[ZYDIS_REGISTER_RAX + i] = value;
+		registers.values[ZYDIS_REGISTER_EAX + i] = static_cast<uint32_t>(value);
+	}
+	uint64_t address = 0;
+	if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddressEx(&instruction, &source, context.Rip(), &registers,
+	                                             &address)) ||
+	    fault_vaddr < address || fault_vaddr - address >= mem_bytes) {
+		return false;
+	}
+	load.address    = address;
+	load.size       = mem_bytes;
+	load.length     = instruction.length;
+	load.kind       = kind;
+	load.dest       = static_cast<uint8_t>(index);
+	load.dest_bytes = static_cast<uint8_t>(dest_bytes);
+	load.vex        = vex;
+	return true;
+}
+
+bool ApplyGuestLoad(void* native_context, const GuestLoad::Load& load, const void* bytes) {
+	Context context {};
+	if (!MakeContext(native_context, context) || load.size == 0 || load.size > 16) {
+		return false;
+	}
+	switch (load.kind) {
+		case LoadGpr:
+		case LoadGprZx:
+		case LoadGprSx: {
+			uint64_t value = 0;
+			std::memcpy(&value, bytes, load.size);
+			if (load.kind == LoadGprSx && load.size < 8) {
+				const auto shift = 64u - load.size * 8u;
+				value = static_cast<uint64_t>(static_cast<int64_t>(value << shift) >> shift);
+			}
+			auto& reg = context.Gpr(load.dest);
+			switch (load.dest_bytes) {
+				case 8: reg = value; break;
+				case 4: reg = static_cast<uint32_t>(value); break; // writes zero the upper half
+				case 2: reg = (static_cast<uint64_t>(reg) & ~uint64_t {0xffff}) | (value & 0xffffu); break;
+				case 1: reg = (static_cast<uint64_t>(reg) & ~uint64_t {0xff}) | (value & 0xffu); break;
+				default: return false;
+			}
+			break;
+		}
+		case LoadXmm: {
+			auto* xmm = context.Xmm(load.dest);
+			if (xmm == nullptr) {
+				return false;
+			}
+			uint8_t value[16] {};
+			std::memcpy(value, bytes, load.size);
+			std::memcpy(xmm, value, sizeof(value));
+			if (load.vex) {
+				context.ClearUpperYmm(load.dest);
+			}
+			break;
+		}
+		default: return false;
+	}
+	context.Advance(load.length);
+	return true;
+}
+
+bool TryEmulate(void* native_context) {
+	Context context {};
+	if (!MakeContext(native_context, context)) {
+		return false;
+	}
 	return TryEmulateReciprocalSquareRoot(context) || TryEmulateMonitorxMwaitx(context) ||
-	       TryEmulateSse4a(context) || TryEmulateShaNi(context) || TryEmulateCpuExtensions(context);
-#else
-	return TryEmulateSse4a(context) || TryEmulateCpuExtensions(context);
+	       TryEmulateSse4a(context) ||
+#if !defined(__APPLE__)
+	       TryEmulateShaNi(context) ||
 #endif
+	       TryEmulateCpuExtensions(context);
 }
 
 } // namespace Loader::X64InstructionEmulator

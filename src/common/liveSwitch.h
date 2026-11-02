@@ -102,6 +102,20 @@ void CpSliceEnd() noexcept;
 // Whether KYTY_LIVE_FILE live control runs.
 [[nodiscard]] bool Enabled() noexcept;
 
+// Cumulative GPU execution totals since process start (GpuTiming, KYTY_GPU_TIMING=1 or the hang
+// trace). Once a provider is set, every application line also carries them after the CP part, so a
+// same-process A/B reads GPU ms per flip per slot as well:
+//   Live: seq 3 applied at CP flip 5123 (t_ms .., t_us .., cp_busy_us ..) gpu [busy_us 1, idle_us 2,
+//   starved_us 3, cmdbufs 4]: ...
+// The totals lag the CP by the GPU's completion latency (one or two flips).
+struct GpuTotals {
+	uint64_t busy_ns    = 0;
+	uint64_t idle_ns    = 0;
+	uint64_t starved_ns = 0;
+	uint64_t cmdbufs    = 0;
+};
+void SetGpuTotalsProvider(GpuTotals (*provider)()) noexcept;
+
 namespace Testing {
 // What the live-control thread does with the file's text: parse it and stage the changes.
 void StageText(std::string_view text);

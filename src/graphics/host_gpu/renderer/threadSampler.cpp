@@ -1,6 +1,7 @@
 #include "graphics/host_gpu/renderer/threadSampler.h"
 
 #include "common/common.h"
+#include "common/cpuPlacement.h"
 #include "common/hostException.h"
 
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
@@ -282,6 +283,7 @@ void StartThreadSampler(const char* name) {
 	std::thread([sampler = std::make_shared<ThreadSampler>(name, directory, thread, low, high,
 	                                                       period_us, copy_bytes)] {
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+		Common::PlaceCurrentThreadCold();
 		sampler->Run();
 	}).detach();
 	std::printf("thread-sampler: sampling %s every %u us (%zu stack bytes) into %s\n", name, period_us,

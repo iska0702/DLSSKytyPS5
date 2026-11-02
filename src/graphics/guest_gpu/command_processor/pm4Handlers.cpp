@@ -6,6 +6,7 @@
 #include "graphics/guest_gpu/command_processor/commandProcessor.h"
 #include "graphics/guest_gpu/command_processor/pm4Dispatch.h"
 #include "graphics/guest_gpu/graphicsRun.h"
+#include "graphics/host_gpu/renderer/cache/bufferCache.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -202,7 +203,6 @@ static HW::RenderControl DecodeRenderControl(uint32_t value) {
 	    KYTY_PM4_GET(value, DB_RENDER_CONTROL, COPY_STENCIL_TO_COLOR) != 0;
 	r.copy_centroid          = KYTY_PM4_GET(value, DB_RENDER_CONTROL, COPY_CENTROID) != 0;
 	r.copy_sample            = KYTY_PM4_GET(value, DB_RENDER_CONTROL, COPY_SAMPLE);
-	EXIT_NOT_IMPLEMENTED(r.copy_depth_to_color || r.copy_stencil_to_color);
 
 	return r;
 }
@@ -308,7 +308,15 @@ KYTY_HW_CTX_PARSER(HwCtxSetCentroidPriority) {
 static void HwCtxIgnoreAaMaskRegister([[maybe_unused]] uint32_t cmd_offset,
                                       [[maybe_unused]] uint32_t value) {}
 
-static void HwCtxIgnoreAlphaToMaskRegister([[maybe_unused]] uint32_t value) {}
+// DB_ALPHA_TO_MASK as alpha-to-coverage (upstream 13b291f99). KYTY_ALPHA_TO_MASK=0 ignores the
+// register as before (no coverage from alpha, early depth tests kept).
+static bool AlphaToMaskHonoured() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_ALPHA_TO_MASK");
+		return value == nullptr || std::strcmp(value, "0") != 0;
+	}();
+	return enabled;
+}
 
 static void HwCtxIgnoreDisabledUserClipPlane(CommandProcessor& cp, uint32_t value) {
 	EXIT_NOT_IMPLEMENTED(value != 0 || cp.GetCtx().GetClipControl().user_clip_planes != 0);
@@ -461,16 +469,6 @@ KYTY_HW_CTX_PARSER(HwCtxSetPointState) {
 
 	for (uint32_t i = 0; i < num_values; i++) {
 		HwCtxIgnorePointState(cmd_offset + i, buffer[i]);
-	}
-
-	return num_values;
-}
-
-KYTY_HW_CTX_PARSER(HwCtxSetAlphaToMask) {
-	auto num_values = KYTY_PM4_LEN(cmd_id) - 2u;
-
-	for (uint32_t i = 0; i < num_values; i++) {
-		HwCtxIgnoreAlphaToMaskRegister(buffer[i]);
 	}
 
 	return num_values;
@@ -1339,8 +1337,10 @@ KYTY_HW_UC_PARSER(HwUcSetGdsOaRegisters) {
 KYTY_CP_OP_PARSER(CpOpAcquireMem) {
 	KYTY_PROFILER_DETAIL_FUNCTION();
 
-	EXIT_NOT_IMPLEMENTED(cmd_id != 0xC0055800 && cmd_id != 0xc0061050);
-	return (cmd_id == 0xc0061050 ? 7 : 6);
+	// IT_ACQUIRE_MEM in its PS4 (7 DWORDs) and PS5 (8 DWORDs, what AgcDcbAcquireMem emits) forms,
+	// and the custom NOP form older builds emitted (kept for recorded command streams).
+	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0055800 && cmd_id != 0xc0065800 && cmd_id != 0xc0061050);
+	return cmd_id == 0xc0061050 ? 7 : KYTY_PM4_LEN(cmd_id) - 1;
 }
 
 KYTY_CP_OP_PARSER(CpOpDispatchDirect) {
@@ -1637,8 +1637,35 @@ KYTY_CP_OP_PARSER(CpOpDmaData) {
 	return 6;
 }
 
+// The first stage's user SGPR at an SH register location: the GS user SGPR, 32 + the HS user SGPR
+// for a tessellated draw (LS-HS), -1 for another register.
+static int32_t FirstStageUserSgprAt(uint32_t location) {
+	const auto id = location - Pm4::SPI_SHADER_USER_DATA_GS_0;
+	if (id < 32u) return static_cast<int32_t>(id);
+	const auto hs = location - Pm4::SPI_SHADER_USER_DATA_HS_0;
+	return hs < 32u ? static_cast<int32_t>(32u + hs) : -1;
+}
+
+// The GS user SGPR at an SH register location, -1 for another register.
+// KYTY_START_INSTANCE_SGPR=0: indirect draws name no start-instance SGPR (the shaders still count
+// the instance ID from 0, as the GPU does).
+static int32_t GsUserSgprAt(uint32_t location) {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_START_INSTANCE_SGPR");
+		return value == nullptr || std::strcmp(value, "0") != 0;
+	}();
+	if (!enabled) {
+		return -1;
+	}
+	const auto id = location - Pm4::SPI_SHADER_USER_DATA_GS_0;
+	return id < 32u ? static_cast<int32_t>(id) : -1;
+}
+
 KYTY_CP_OP_PARSER(CpOpDrawIndex) {
 	KYTY_PROFILER_DETAIL_FUNCTION();
+	// Ported from chenxiao07/KytyPS5 3b351932d: only an indirect draw has the CP write a start
+	// instance (START_INST_LOC); the vertex shader is translated for it.
+	cp.GetShCtx().SetStartInstanceUserSgpr(-1);
 
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0073a00 && cmd_id != 0xc0042700);
 
@@ -1687,8 +1714,14 @@ KYTY_CP_OP_PARSER(CpOpDrawIndirect) {
 	const auto data_offset    = buffer[0];
 	const auto draw_initiator = buffer[3];
 	const bool indexed        = (cmd_id == 0xc0032500);
+	// START_INST_LOC: the SH register the CP writes the arguments' start instance into.
+	cp.GetShCtx().SetStartInstanceUserSgpr(GsUserSgprAt(buffer[2] & 0xffffu));
+	// The native indexed packet enables the high-half first-index destination in word 3.
+	const IndirectDrawRegisters registers {
+	    buffer[1] & 0xffffu, buffer[2] & 0xffffu,
+	    indexed && (buffer[2] & (1u << 28u)) != 0 ? buffer[1] >> 16u : Pm4::SH_NOP};
 
-	cp.DrawIndirect(data_offset, draw_initiator, indexed);
+	cp.DrawIndirect(data_offset, registers, draw_initiator, indexed);
 
 	return 4;
 }
@@ -1700,6 +1733,7 @@ KYTY_CP_OP_PARSER(CpOpDrawIndirectMulti) {
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0082c00 && cmd_id != 0xc0083800);
 
 	const auto data_offset        = buffer[0];
+	cp.GetShCtx().SetStartInstanceUserSgpr(GsUserSgprAt(buffer[2] & 0xffffu));
 	const auto count_indirect     = (buffer[3] >> 30u) & 0x1u;
 	const auto max_count_or_count = buffer[4];
 	auto*      count_addr         = reinterpret_cast<const volatile uint32_t*>(
@@ -1707,13 +1741,22 @@ KYTY_CP_OP_PARSER(CpOpDrawIndirectMulti) {
 	const auto stride_in_bytes = buffer[7];
 	const auto draw_initiator  = buffer[8];
 	const bool indexed         = (cmd_id == 0xc0083800);
+	// Multi-draw moves the first-index enable to word 4; the destinations stay in 2/3.
+	const IndirectDrawRegisters registers {
+	    buffer[1] & 0xffffu, buffer[2] & 0xffffu,
+	    indexed && (buffer[3] & (1u << 28u)) != 0 ? buffer[1] >> 16u : Pm4::SH_NOP};
+
+	// DRAW_INDEX_ENABLE (word 3 bit 31): the CP writes each record's index into the user SGPR at
+	// DRAW_INDEX_LOC (bits 0..15) before drawing it (Insomniac mesh draws index a per-draw table).
+	const int32_t draw_index_sgpr =
+	    (buffer[3] >> 31u) != 0u ? FirstStageUserSgprAt(buffer[3] & 0xffffu) : -1;
 
 	if (count_indirect == 0) {
 		count_addr = nullptr;
 	}
 
 	cp.DrawIndirectMulti(data_offset, max_count_or_count, count_addr, stride_in_bytes,
-	                     draw_initiator, indexed);
+	                     registers, draw_initiator, indexed, draw_index_sgpr);
 
 	return 9;
 }
@@ -1722,6 +1765,7 @@ KYTY_CP_OP_PARSER(CpOpDrawIndexOffset) {
 	KYTY_PROFILER_DETAIL_FUNCTION();
 
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0033500);
+	cp.GetShCtx().SetStartInstanceUserSgpr(-1);
 
 	uint32_t max_index_size = buffer[0];
 	uint32_t index_offset   = buffer[1];
@@ -1740,6 +1784,7 @@ KYTY_CP_OP_PARSER(CpOpDrawIndexAuto) {
 	KYTY_PROFILER_DETAIL_FUNCTION();
 
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0012d00);
+	cp.GetShCtx().SetStartInstanceUserSgpr(-1);
 
 	uint32_t index_count = buffer[0];
 	uint32_t flags       = buffer[1];
@@ -1973,13 +2018,7 @@ KYTY_CP_OP_PARSER(CpOpIndirectBuffer) {
 
 	auto* indirect_buffer =
 	    reinterpret_cast<const uint32_t*>(buffer[0] | (static_cast<uint64_t>(buffer[1]) << 32u));
-	uint32_t                     indirect_num_dw = control & 0xfffffu;
-	static std::atomic<uint32_t> indirect_log_count {0};
-	if (indirect_log_count.fetch_add(1) < 128) {
-		LOGF("\t indirect buffer: addr=0x%016" PRIx64 ", num_dw=%" PRIu32 ", control=0x%08" PRIx32
-		     "\n",
-		     reinterpret_cast<uint64_t>(indirect_buffer), indirect_num_dw, control);
-	}
+	const uint32_t indirect_num_dw = control & 0xfffffu;
 
 	if (indirect_num_dw == 0) {
 		return 3;
@@ -2192,27 +2231,23 @@ KYTY_CP_OP_PARSER(CpOpIndirectUcRegs) {
 KYTY_CP_OP_PARSER(CpOpMarker) {
 	KYTY_PROFILER_DETAIL_FUNCTION();
 
-	// EXIT_NOT_IMPLEMENTED(cmd_id != 0xC0001000);
-
-	uint32_t id     = buffer[0] & 0xfffu;
 	uint32_t len_dw = ((cmd_id >> 16u) & 0x3fffu);
 
-	switch (id) {
-		case 0x0: break;
-		case 0x4: cp.SetUserDataMarker(HW::UserSgprType::Vsharp); break;
-		case 0xd: cp.SetUserDataMarker(HW::UserSgprType::Region); break;
-		case 0x777: {
+	switch (buffer[0]) {
+		case 0x68750004: cp.SetUserDataMarker(HW::UserSgprType::Vsharp); break;
+		case 0x6875000d: cp.SetUserDataMarker(HW::UserSgprType::Region); break;
+		case 0x68750777: {
 			cp.Flip();
 			break;
 		}
-		case 0x778: {
+		case 0x68750778: {
 			auto* addr =
 			    reinterpret_cast<void*>(buffer[1] | (static_cast<uint64_t>(buffer[2]) << 32u));
 			uint32_t value = buffer[3];
 			cp.Flip(addr, value);
 			break;
 		}
-		case 0x781: {
+		case 0x68750781: {
 			auto* addr =
 			    reinterpret_cast<void*>(buffer[1] | (static_cast<uint64_t>(buffer[2]) << 32u));
 			uint32_t value          = buffer[3];
@@ -2221,7 +2256,8 @@ KYTY_CP_OP_PARSER(CpOpMarker) {
 			cp.FlipWithInterrupt(eop_event_type, cache_action, addr, value);
 			break;
 		}
-		default: EXIT("unknown marker at %05" PRIx32 ": 0x%" PRIx32 "\n", num_dw - dw, id);
+		// NOP payloads are caller-owned data; only complete known marker tags execute.
+		default: break;
 	}
 
 	return len_dw + 1;
@@ -2765,6 +2801,7 @@ void CommandProcessor::ExecLodStats(const CpSeq::LodStatsOp& op) {
 	if (lod_mode == 4) {
 		ReportLodStats(reinterpret_cast<uint64_t>(dst), buffer_size, body[3]);
 	} else if (dst != nullptr && buffer_size != 0 && lod_mode != 2) {
+		StreamCopyDefer::NoteGpuOnlyWrite(reinterpret_cast<uint64_t>(dst), buffer_size);
 		memset(dst, lod_mode == 3 ? 0xff : 0, buffer_size);
 		if ((lod_mode == 0 || lod_mode == 3) && buffer_size >= sizeof(uint32_t)) {
 			auto* label = static_cast<uint32_t*>(dst);
@@ -3060,7 +3097,7 @@ void GraphicsInitJmpTablesCxIndirect() {
 
 	for (auto cmd_offset = Pm4::PA_CL_UCP_0_X; cmd_offset <= Pm4::PA_CL_UCP_5_W; cmd_offset++) {
 		g_hw_ctx_indirect_func[cmd_offset] = [](KYTY_HW_CTX_INDIRECT_ARGS) {
-			HwCtxIgnoreDisabledUserClipPlane(cp, value);
+			cp.GetCtx().SetUserClipPlane(cmd_offset - Pm4::PA_CL_UCP_0_X, value);
 		};
 	}
 
@@ -3652,7 +3689,8 @@ void GraphicsInitJmpTablesCxIndirect() {
 	g_hw_ctx_indirect_func[Pm4::PA_SC_CONSERVATIVE_RASTERIZATION_CNTL] =
 	    [](KYTY_HW_CTX_INDIRECT_ARGS) { HwCtxIgnorePaScExtendedControl(cmd_offset, value); };
 	g_hw_ctx_indirect_func[Pm4::DB_ALPHA_TO_MASK] = [](KYTY_HW_CTX_INDIRECT_ARGS) {
-		HwCtxIgnoreAlphaToMaskRegister(value);
+		cp.GetCtx().SetAlphaToMaskEnable(
+		    AlphaToMaskHonoured() && KYTY_PM4_GET(value, DB_ALPHA_TO_MASK, ALPHA_TO_MASK_ENABLE) != 0);
 	};
 	g_hw_ctx_indirect_func[Pm4::CB_COLOR_CONTROL] = [](KYTY_HW_CTX_INDIRECT_ARGS) {
 		cp.GetCtx().SetColorControl(DecodeColorControl(value));

@@ -7,10 +7,16 @@
 #include "graphics/shader/recompiler/ir/passes/BindingLayout.h"
 #include "graphics/shader/recompiler/ir/passes/ReadLaneElimination.h"
 
+#include "common/logging/log.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cinttypes>
 #include <cmath>
+#include <cstdio>
+#include <mutex>
+#include <unordered_set>
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv {
 
@@ -24,10 +30,14 @@ enum HostFloatControlBits : uint32_t {
 
 std::atomic_uint32_t g_host_float_controls {0};
 std::atomic_bool     g_storage_dword_loads_return_zero {false};
+std::atomic_bool     g_uniform_dword_loads_return_zero {false};
 std::atomic_bool     g_image_min_lod {false};
 std::atomic_uint8_t  g_compute_derivatives {static_cast<uint8_t>(HostComputeDerivatives::Khr)};
 std::atomic_uint8_t  g_shader_clock_scope {0};
 std::atomic_int32_t  g_shader_clock_shift {0};
+std::atomic_bool     g_guard_vertex_outputs {false};
+std::atomic_bool     g_guard_mesh_outputs {false};
+std::atomic_uint8_t  g_wave_clusters {0}; // HostWaveClusters: bit 0 vertex, 1 pixel, 2 mesh
 
 [[noreturn]] void Fail(const IR::Program& program, const char* reason) {
 	EXIT("SPIR-V validation failed: hash=0x%016" PRIx64 " stage=%u reason=%s\n",
@@ -35,7 +45,7 @@ std::atomic_int32_t  g_shader_clock_shift {0};
 	std::abort();
 }
 
-void ValidateNativeProgram(const IR::Program& program) {
+void ValidateNativeProgram(const IR::Program& program, bool lds_storage) {
 	using Kind                                             = IR::DescriptorBindingKind;
 	constexpr auto                               KindCount = static_cast<size_t>(Kind::Count);
 	std::array<std::vector<uint32_t>, KindCount> expected;
@@ -52,8 +62,20 @@ void ValidateNativeProgram(const IR::Program& program) {
 		present[index]   = true;
 		expected[index]  = std::move(resources);
 	};
-	if (!program.info.buffers.empty()) {
-		Expect(Kind::Buffers, Dense(program.info.buffers.size()));
+	{
+		auto uniform = IR::UniformBufferResources(program);
+		std::vector<uint32_t> storage;
+		for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
+			if (!std::ranges::binary_search(uniform, i)) {
+				storage.push_back(i);
+			}
+		}
+		if (!storage.empty()) {
+			Expect(Kind::Buffers, std::move(storage));
+		}
+		if (!uniform.empty()) {
+			Expect(Kind::UniformBuffers, std::move(uniform));
+		}
 	}
 	for (uint32_t i = 0; i < program.info.images.size(); i++) {
 		const auto kind = IR::DescriptorBindingForImage(program.info.images[i]);
@@ -72,27 +94,15 @@ void ValidateNativeProgram(const IR::Program& program) {
 	if (!program.info.samplers.empty()) {
 		Expect(Kind::Samplers, Dense(program.info.samplers.size()));
 	}
-	bool uses_gds = false;
-	for (const auto* block: program.blocks) {
-		for (const auto& inst: *block) {
-			if (IR::SharedAccessOf(inst.GetOpcode()) == IR::SharedAccess::None) {
-				continue;
-			}
-			const auto index = inst.Flags<IR::MemoryFlags>().index;
-			if (index >= program.memory_info.size()) {
-				Fail(program, "shared operation has invalid memory metadata");
-			}
-			const auto kind = program.memory_info[index].kind;
-			if (kind != IR::ResourceKind::Lds && kind != IR::ResourceKind::Gds) {
-				Fail(program, "shared operation has invalid resource kind");
-			}
-			uses_gds |= kind == IR::ResourceKind::Gds;
-		}
-	}
-	if (uses_gds || LoopGuardApplies(program.shader_hash) || IR::UsesBvhNodeCount(program)) {
+	// AllocateBindings' rule: CollectSharedMemory also rejects invalid shared-memory metadata.
+	const auto shared = IR::CollectSharedMemory(program);
+	if (shared.gds || LoopGuardApplies(program.shader_hash) || IR::UsesBvhNodeCount(program)) {
 		Expect(Kind::Gds);
 	}
 	if (IR::UsesRayGuide(program)) Expect(Kind::RayGuide);
+	if (shared.lds && lds_storage) {
+		Expect(Kind::SharedMemory);
+	}
 	if (program.info.uses_dma) {
 		Expect(Kind::BdaPagetable);
 		Expect(Kind::FaultBuffer);
@@ -129,9 +139,13 @@ void ValidateNativeProgram(const IR::Program& program) {
 	}
 	const auto has_shader_data_storage = present[static_cast<size_t>(Kind::ShaderData)];
 	const auto shader_data_dwords = program.bindings.ShaderDataDwords();
+	const auto user_data_dwords = program.bindings.user_data_registers.size();
+	const bool has_dispatch_threads = program.bindings.dispatch_thread_dword != IR::PushData::NoStart;
 	if ((program.bindings.UsesPushData() &&
 	     !IR::PushData::CanFit(program.bindings.push_data_start_dword, shader_data_dwords)) ||
-	    program.bindings.memory_offset_dword != program.bindings.user_data_registers.size() ||
+	    (has_dispatch_threads && (program.stage != ShaderType::Compute ||
+	                              program.bindings.dispatch_thread_dword != user_data_dwords)) ||
+	    program.bindings.memory_offset_dword != user_data_dwords + (has_dispatch_threads ? 3u : 0u) ||
 	    program.bindings.memory_offset_count != program.info.buffers.size() ||
 	    program.bindings.mip_stats_count != (mip_stats ? program.info.images.size() : 0u) ||
 	    has_shader_data_storage != (shader_data_dwords != 0 && !program.bindings.UsesPushData()) ||
@@ -219,6 +233,81 @@ void ValidateNativeProgram(const IR::Program& program) {
 	}
 }
 
+// KYTY_WAVE32_CLUSTERS: one log line per wave32 graphics program that shares a wider host subgroup
+// (AMD fragment and vertex waves are 64 wide), with its cross-lane operations, so a player's log
+// names the shaders whose wave-level code runs on clusters (Playroom cloud blocks, AMD test 2).
+// Once per graphics program whose buffer descriptors set ADD_TID (compute uses it routinely).
+void NoteGraphicsAddTid(const IR::Program& program, uint32_t lane_count, bool wave_clusters) {
+	uint32_t buffers = 0, swizzled = 0, stride = 0;
+	for (const auto& buffer: program.info.buffers) {
+		if ((buffer.packed_stride & (1u << 20u)) != 0u) {
+			buffers++;
+			swizzled += (buffer.packed_stride & (1u << 14u)) != 0u ? 1u : 0u;
+			stride = std::max(stride, buffer.packed_stride & 0x3fffu);
+		}
+	}
+	if (buffers == 0) {
+		return;
+	}
+	static std::mutex                   mutex;
+	static std::unordered_set<uint64_t> noted;
+	{
+		const std::lock_guard lock(mutex);
+		if (!noted.insert(program.shader_hash ^ (static_cast<uint64_t>(program.stage) << 60u)).second) {
+			return;
+		}
+	}
+	char text[256];
+	std::snprintf(text, sizeof(text),
+	              "Kyty buffer ADD_TID: stage %u shader 0x%016" PRIx64
+	              " wave%u, %u lane(s) per invocation%s: %u buffer(s), %u swizzled, max stride %u\n",
+	              static_cast<unsigned>(program.stage), program.shader_hash, program.wave_size,
+	              lane_count, wave_clusters ? ", wave32 clusters" : "", buffers, swizzled, stride);
+	Log::WriteToConsoleAndLog(text);
+}
+
+void NoteClusteredProgram(const IR::Program& program) {
+	static std::mutex                   mutex;
+	static std::unordered_set<uint64_t> noted;
+	{
+		const std::lock_guard lock(mutex);
+		if (!noted.insert(program.shader_hash ^ (static_cast<uint64_t>(program.stage) << 60u)).second) {
+			return;
+		}
+	}
+	uint32_t first_lane = 0, lane_rw = 0, ballot = 0, dpp = 0, swizzle = 0, permute = 0, lane_id = 0;
+	for (const auto* block: program.blocks) {
+		for (const auto& inst: *block) {
+			switch (inst.GetOpcode()) {
+				case IR::ValueOpcode::ReadFirstLane: first_lane++; break;
+				case IR::ValueOpcode::ReadLane:
+				case IR::ValueOpcode::WriteLane: lane_rw++; break;
+				case IR::ValueOpcode::Ballot:
+				case IR::ValueOpcode::AnyLane: ballot++; break;
+				case IR::ValueOpcode::DppMoveU32:
+				case IR::ValueOpcode::DppUpdateU32: dpp++; break;
+				case IR::ValueOpcode::SwizzleU32: swizzle++; break;
+				case IR::ValueOpcode::PermuteU32:
+				case IR::ValueOpcode::BpermuteU32:
+				case IR::ValueOpcode::Permlane16U32: permute++; break;
+				case IR::ValueOpcode::LaneId: lane_id++; break;
+				default: break;
+			}
+		}
+	}
+	char text[320];
+	std::snprintf(text, sizeof(text),
+	              "Kyty wave32 clusters: %s shader 0x%016" PRIx64
+	              " runs on a wider host subgroup (KYTY_WAVE32_CLUSTERS); cross-lane ops: "
+	              "readfirstlane %u, readlane/writelane %u, ballot/any %u, dpp %u, swizzle %u, "
+	              "permute %u, lane id %u\n",
+	              program.stage == ShaderType::Pixel ? "pixel"
+	              : program.stage == ShaderType::Mesh ? "mesh"
+	                                                  : "vertex",
+	              program.shader_hash, first_lane, lane_rw, ballot, dpp, swizzle, permute, lane_id);
+	Log::WriteToConsoleAndLog(text);
+}
+
 } // namespace
 
 Emitter::SpirvRequirements Emitter::AnalyzeProgramRequirements(const IR::Program& program) {
@@ -226,9 +315,19 @@ Emitter::SpirvRequirements Emitter::AnalyzeProgramRequirements(const IR::Program
 	for (const auto* block: program.blocks) {
 		for (const auto& inst: *block) {
 			requirements.float64 |= inst.GetType() == IR::Type::F64;
+			// KYTY_DCACHE_INV: an invalidation makes every buffer the program reads coherent.
+			requirements.coherent_buffers |= inst.GetOpcode() == IR::ValueOpcode::DataCacheInvalidate;
 			if (IR::BufferAccessOf(inst.GetOpcode()) == IR::BufferAccess::Atomic &&
 			    inst.GetType() == IR::Type::U64) {
 				requirements.buffer_int64_atomics = true;
+			}
+			// KYTY_PS_HELPER_ATOMICS_SKIP: emulated read-modify-writes (AtomicUpdate) of pixel shaders
+			// test gl_HelperInvocation.
+			if (program.stage == ShaderType::Pixel && GetCodegenOptions().ps_helper_atomics_skip) {
+				const auto buffer = IR::BufferAccessOf(inst.GetOpcode());
+				requirements.helper_invocation |=
+				    buffer == IR::BufferAccess::Write || buffer == IR::BufferAccess::Atomic ||
+				    IR::ImageOpcodeInfoOf(inst.GetOpcode()).access == IR::ImageAccess::Atomic;
 			}
 			const auto address_access = IR::AddressOpcodeInfoOf(inst.GetOpcode()).access;
 			if (address_access != IR::AddressAccess::None) {
@@ -236,22 +335,29 @@ Emitter::SpirvRequirements Emitter::AnalyzeProgramRequirements(const IR::Program
 				if (memory_index >= program.memory_info.size()) {
 					Fail(program, "address operation has invalid memory metadata");
 				}
-				if (program.memory_info[memory_index].kind == IR::ResourceKind::Scratch) {
+				const auto& memory = program.memory_info[memory_index];
+				if (memory.kind == IR::ResourceKind::Scratch) {
 					if (program.scratch_dwords == 0) {
 						Fail(program, "scratch operation has no per-thread storage");
 					}
 					requirements.function_scratch = true;
 				} else if (address_access == IR::AddressAccess::Write) {
 					Fail(program, "writable FLAT/GLOBAL addresses require GPU ownership tracking");
+				} else {
+					// Descriptor stores can alias coherent physical-address loads.
+					requirements.coherent_buffers |= memory.coherent;
 				}
 			}
 			if (IR::BufferAccessOf(inst.GetOpcode()) != IR::BufferAccess::None) {
+				requirements.buffer_writes |=
+				    IR::BufferAccessOf(inst.GetOpcode()) != IR::BufferAccess::Read;
 				const auto memory_index = inst.Flags<IR::MemoryFlags>().index;
 				if (memory_index >= program.memory_info.size()) {
 					Fail(program, "buffer operation has invalid memory metadata");
 				}
 				const auto& memory = program.memory_info[memory_index];
-				if (memory.kind == IR::ResourceKind::IndirectBuffer) {
+				if (memory.kind == IR::ResourceKind::IndirectBuffer &&
+				    inst.GetOpcode() != IR::ValueOpcode::ReadConstBuffer) {
 					requirements.subgroup_local_invocation_id = true;
 				}
 				if (memory.kind == IR::ResourceKind::Buffer) {
@@ -259,9 +365,19 @@ Emitter::SpirvRequirements Emitter::AnalyzeProgramRequirements(const IR::Program
 					if (memory.resource >= program.info.buffers.size()) {
 						Fail(program, "buffer operation has invalid resource metadata");
 					}
+					const auto bits = StorageBufferElementBits(program, memory);
+					requirements.buffer_u8 |= bits == 8u;
+					requirements.buffer_u16 |= bits == 16u;
+					// ADD_TID adds the lane's id within its wave to the index. BufferLane takes it from
+					// EmitSubgroupLocalInvocationId, the lane id every cross-lane op of the stage uses
+					// (wave64 halves, wave32 clusters). A wave64 vertex or pixel shader on a 32-wide
+					// host subgroup runs each 32 lanes as a wave of their own, so its lane is 0-31,
+					// the lane its LaneId (v_mbcnt) and shuffles see too. A hull shader's lane is its
+					// control-point invocation id (EmitLaneId), not a lane of the guest wave that packs several
+					// patches, so the guest address cannot be formed there.
 					if ((program.info.buffers[memory.resource].packed_stride & (1u << 20u)) != 0u) {
-						if (program.stage != ShaderType::Compute) {
-							Fail(program, "buffer ADD_TID is only valid for compute shaders");
+						if (program.stage == ShaderType::TessellationControl) {
+							Fail(program, "buffer ADD_TID in a hull shader has no guest wave lane");
 						}
 						requirements.subgroup_local_invocation_id = true;
 					}
@@ -299,6 +415,7 @@ Emitter::SpirvRequirements Emitter::AnalyzeProgramRequirements(const IR::Program
 				}
 			}
 			switch (inst.GetOpcode()) {
+				case IR::ValueOpcode::StoreCompletion: requirements.subgroup_barrier = true; break;
 				case IR::ValueOpcode::Ballot:
 				case IR::ValueOpcode::AnyLane: requirements.subgroup_ballot = true; break;
 				case IR::ValueOpcode::IsHelperInvocation:
@@ -316,7 +433,7 @@ Emitter::SpirvRequirements Emitter::AnalyzeProgramRequirements(const IR::Program
 						requirements.subgroup_local_invocation_id = true;
 					}
 					if (inst.GetOpcode() == IR::ValueOpcode::ReadLane &&
-					    GetCodegenOptions().lane_reductions &&
+					    GetCodegenOptions().lane_reductions && !WaveClustersActive(program) &&
 					    IR::MatchLaneReduction(inst, program.wave_size)) {
 						requirements.subgroup_arithmetic          = true;
 						requirements.subgroup_local_invocation_id = true;
@@ -373,6 +490,12 @@ Emitter::SpirvRequirements Emitter::AnalyzeProgramRequirements(const IR::Program
 			}
 		}
 	}
+	// KYTY_WAVE32_CLUSTERS: every ballot and shuffle selects the wave's own 32 lanes by the
+	// invocation's subgroup lane.
+	if (WaveClustersActive(program) &&
+	    (requirements.subgroup_ballot || requirements.subgroup_shuffle)) {
+		requirements.subgroup_local_invocation_id = true;
+	}
 	return requirements;
 }
 
@@ -396,11 +519,16 @@ HostFloatControls GetHostFloatControls() {
 void SetHostBufferRobustness(const HostBufferRobustness& robustness) {
 	g_storage_dword_loads_return_zero.store(robustness.storage_dword_loads_return_zero,
 	                                        std::memory_order_relaxed);
+	g_uniform_dword_loads_return_zero.store(robustness.uniform_dword_loads_return_zero,
+	                                        std::memory_order_relaxed);
+	SetHostUniformBufferRobust(robustness.uniform_dword_loads_return_zero);
 }
 
 HostBufferRobustness GetHostBufferRobustness() {
 	return {.storage_dword_loads_return_zero =
-	            g_storage_dword_loads_return_zero.load(std::memory_order_relaxed)};
+	            g_storage_dword_loads_return_zero.load(std::memory_order_relaxed),
+	        .uniform_dword_loads_return_zero =
+	            g_uniform_dword_loads_return_zero.load(std::memory_order_relaxed)};
 }
 
 void SetHostImageFeatures(const HostImageFeatures& features) {
@@ -415,6 +543,16 @@ HostImageFeatures GetHostImageFeatures() {
 	            g_compute_derivatives.load(std::memory_order_relaxed))};
 }
 
+void SetHostGeometryGuard(const HostGeometryGuard& guard) {
+	g_guard_vertex_outputs.store(guard.vertex_outputs, std::memory_order_relaxed);
+	g_guard_mesh_outputs.store(guard.mesh_outputs, std::memory_order_relaxed);
+}
+
+HostGeometryGuard GetHostGeometryGuard() {
+	return {.vertex_outputs = g_guard_vertex_outputs.load(std::memory_order_relaxed),
+	        .mesh_outputs   = g_guard_mesh_outputs.load(std::memory_order_relaxed)};
+}
+
 void SetHostShaderClock(const HostShaderClock& clock) {
 	g_shader_clock_scope.store(static_cast<uint8_t>(clock.scope), std::memory_order_relaxed);
 	g_shader_clock_shift.store(std::clamp(clock.shift, -8, 8), std::memory_order_relaxed);
@@ -423,6 +561,38 @@ void SetHostShaderClock(const HostShaderClock& clock) {
 HostShaderClock GetHostShaderClock() {
 	return {.scope = static_cast<HostClockScope>(g_shader_clock_scope.load(std::memory_order_relaxed)),
 	        .shift = g_shader_clock_shift.load(std::memory_order_relaxed)};
+}
+
+void SetHostWaveClusters(const HostWaveClusters& clusters) {
+	g_wave_clusters.store(static_cast<uint8_t>((clusters.vertex ? 1u : 0u) | (clusters.pixel ? 2u : 0u) |
+	                                           (clusters.mesh ? 4u : 0u)),
+	                      std::memory_order_relaxed);
+}
+
+HostWaveClusters GetHostWaveClusters() {
+	const auto bits = g_wave_clusters.load(std::memory_order_relaxed);
+	return {.vertex = (bits & 1u) != 0u, .pixel = (bits & 2u) != 0u, .mesh = (bits & 4u) != 0u};
+}
+
+bool WaveClustersActive(const IR::Program& program) {
+	const auto mode = GetCodegenOptions().wave32_clusters;
+	if (program.wave_size != 32u || mode == Wave32Clusters::Off) {
+		return false;
+	}
+	const auto host  = GetHostWaveClusters();
+	const bool force = mode == Wave32Clusters::Force;
+	switch (program.stage) {
+		case ShaderType::Vertex:
+		case ShaderType::Local:
+		case ShaderType::TessellationEvaluation: return force || host.vertex;
+		case ShaderType::Pixel: return force || host.pixel;
+		case ShaderType::Mesh: return force || host.mesh;
+		// Compute pipelines require the wave size (DeviceCompat::ComputeSubgroupSize), so only a test
+		// forces clusters there (it runs the wave32 compute cases through the cluster code); hull
+		// lanes are invocation ids, not subgroup lanes.
+		case ShaderType::Compute: return force;
+		default: return false;
+	}
 }
 
 int32_t RealtimeClockShift(double timestamp_period_ns) {
@@ -452,13 +622,64 @@ std::vector<uint32_t> EmitProgram(const IR::Program& program,
 	    !program.shader_info_complete || !program.binding_layout_complete) {
 		Fail(program, "SPIR-V emitter requires a fully planned native shader program");
 	}
-	ValidateNativeProgram(program);
+	ValidateNativeProgram(program, program.stage == ShaderType::Compute &&
+	                                   input_info.compute != nullptr && input_info.compute->lds_storage);
 	if (IR::ValidationEnabled()) {
 		IR::ValidateProgram(program, true);
 	}
 	EmitterState state(program, input_info);
 	state.mip_stats_records = mip_stats_records;
-	state.lane_count = ShaderLanesPerInvocation(program.stage, program.wave_size, input_info);
+	// KYTY_LANE_LOCAL: a proven lane-local wave64 program runs one guest lane per invocation.
+	state.lane_count =
+	    program.lane_local ? 1u : ShaderLanesPerInvocation(program.stage, program.wave_size, input_info);
+	if (state.lane_count == 2 && GetCodegenOptions().wave64_warps &&
+	    program.stage == ShaderType::Compute && !program.dispatcher_fallback &&
+	    // BVH node counts (KYTY_RT_NODE_BUDGET/STATS) report per two-lane invocation.
+	    !IR::UsesBvhNodeCount(program) &&
+	    !state.requirements.compute_derivatives && !state.requirements.shared_int64_atomics &&
+	    state.lds_storage_class == spv::StorageClassWorkgroup) {
+		// KYTY_WAVE64_WARPS: the workgroup must be exactly the one wave (its barriers then
+		// synchronize the wave, and every lane exists).
+		const auto* workgroup = ShaderWorkgroupInput(program.stage, input_info);
+		if (workgroup != nullptr && std::max(workgroup->threads_num[0], 1u) *
+		                                    std::max(workgroup->threads_num[1], 1u) *
+		                                    std::max(workgroup->threads_num[2], 1u) ==
+		                                64u) {
+			state.split_wave = true;
+			state.lane_count = 1;
+			// A probe emission with every branch half-local finds the blocks that synchronize
+			// the halves; branches that control none of them stay half-local.
+			std::unordered_set<const IR::Block*> sync_blocks;
+			{
+				EmitterState probe(program, input_info);
+				probe.mip_stats_records = mip_stats_records;
+				probe.split_wave        = true;
+				probe.lane_count        = 1;
+				probe.wave_probe        = true;
+				probe.wave_sync_blocks  = &sync_blocks;
+				DefineModule(probe);
+				EmitProgram(probe);
+			}
+			state.wave_local_branches = SplitWaveLocalBranches(program, sync_blocks);
+			static const bool log = std::getenv("KYTY_WAVE64_WARPS_LOG") != nullptr;
+			if (log) {
+				size_t branches = 0;
+				for (const auto& info: program.block_info) {
+					branches += info.terminator.kind == CFG::TerminatorKind::ConditionalBranch ? 1u : 0u;
+				}
+				std::printf("SplitWave CS %016" PRIx64 ": %zu of %zu branches half-local, %zu sync blocks\n",
+				            program.shader_hash, state.wave_local_branches.size(), branches,
+				            sync_blocks.size());
+			}
+		}
+	}
+	state.wave_clusters = state.lane_count == 1 && WaveClustersActive(program);
+	if (state.wave_clusters && program.stage != ShaderType::Compute) {
+		NoteClusteredProgram(program);
+	}
+	if (program.stage != ShaderType::Compute) {
+		NoteGraphicsAddTid(program, state.lane_count, state.wave_clusters);
+	}
 	DefineModule(state);
 	EmitProgram(state);
 	state.builder.AddEntryPoint(ExecutionModelForStage(state.program.stage), state.main_func,

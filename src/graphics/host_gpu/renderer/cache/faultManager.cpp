@@ -9,6 +9,7 @@
 #include "graphics/host_gpu/renderer/commandScheduler.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 #include "graphics/host_gpu/renderer/gpuOpProfiler.h"
+#include "graphics/shader/recompiler/CodegenOptions.h"
 
 #include <bit>
 #include <cinttypes>
@@ -26,7 +27,13 @@ constexpr size_t PageFaultAreaSize = MaxPageFaults * sizeof(uint64_t);
 // dropped-write counter follows it.
 constexpr size_t MaxBdaWritePages = 65536;
 constexpr size_t BdaPagesAreaSize = MaxBdaWritePages * sizeof(uint64_t);
-constexpr size_t BdaDownloadSize  = BdaPagesAreaSize + 16;
+// KYTY_BDA_STORE_LOG: the copy of the store log (its count, then its entries) follows the counter.
+constexpr size_t BdaStoreLogOffset = BdaPagesAreaSize + 16;
+constexpr size_t BdaDownloadSize   = BdaStoreLogOffset + BufferCache::BDA_STORE_LOG_BYTES;
+
+bool StoreLogEnabled() {
+	return ShaderRecompiler::GetCodegenOptions().bda_store_log;
+}
 
 } // namespace
 
@@ -125,7 +132,7 @@ void FaultManager::ProcessFaultBuffer() {
 	}
 
 	m_scheduler.EndRendering();
-	auto command = m_scheduler.Current().Handle();
+	const auto command = m_scheduler.Current().HelperSink();
 	vk::DependencyInfo dependency {};
 	dependency.dependencyFlags          = vk::DependencyFlagBits::eByRegion;
 	dependency.bufferMemoryBarrierCount = 1;
@@ -146,7 +153,12 @@ void FaultManager::ProcessFaultBuffer() {
 		m_download_buffer.Invalidate(offset, PageFaultAreaSize);
 		RangeSet    fault_ranges;
 		const auto* faults = std::bit_cast<const uint64_t*>(mapped);
-		const auto  count  = static_cast<uint32_t>(faults[0]);
+		// The parser counts every faulting page but stores at most MaxPageFaults - 1 records
+		// (entries 1..MaxPageFaults - 1): a larger count would read past this area into another
+		// batch's records or past the download buffer (chenxiao07/KytyPS5 d645c916b). Pages left
+		// out fault again at their next read.
+		const auto count = static_cast<uint32_t>(
+		    std::min<uint64_t>(static_cast<uint32_t>(faults[0]), MaxPageFaults - 1));
 		for (uint32_t index = 1; index <= count; ++index) {
 			fault_ranges.Add(faults[index], BufferCache::CACHING_PAGESIZE);
 			LOGF("Accessed non-GPU cached memory at 0x%016" PRIx64 "\n", faults[index]);
@@ -204,7 +216,7 @@ FaultManager::BdaWrites FaultManager::CollectBdaWrites() {
 	constexpr auto dropped_offset = BufferCache::BDA_DROPPED_WRITES_WORD * sizeof(uint32_t);
 
 	m_scheduler.EndRendering();
-	auto command = m_scheduler.Current().Handle();
+	const auto command = m_scheduler.Current().HelperSink();
 	// The dispatch's shader atomics on the bitmap and the counter before the parse and the copy.
 	vk::BufferMemoryBarrier2 before {};
 	before.srcStageMask  = vk::PipelineStageFlagBits2::eAllCommands;
@@ -239,6 +251,15 @@ FaultManager::BdaWrites FaultManager::CollectBdaWrites() {
 	command.dispatch(static_cast<uint32_t>((BufferCache::FAULT_BITMAP_WORDS + 63) / 64), 1, 1);
 	const vk::BufferCopy counter_copy {dropped_offset, BdaPagesAreaSize, sizeof(uint32_t)};
 	command.copyBuffer(m_fault_buffer.Handle(), m_bda_download->Handle(), 1, &counter_copy);
+	const bool     store_log  = StoreLogEnabled();
+	constexpr auto log_offset = BufferCache::BDA_STORE_LOG_WORD * sizeof(uint32_t);
+	if (store_log) {
+		const vk::BufferCopy log_copy {log_offset, BdaStoreLogOffset,
+		                               BufferCache::BDA_STORE_LOG_BYTES};
+		command.copyBuffer(m_fault_buffer.Handle(), m_bda_download->Handle(), 1, &log_copy);
+	}
+	// The counter and the store log's count (the words between them are unused) are cleared.
+	constexpr auto counters_size = log_offset + sizeof(uint32_t) - dropped_offset;
 	vk::BufferMemoryBarrier2 cleared {};
 	cleared.srcStageMask             = vk::PipelineStageFlagBits2::eTransfer;
 	cleared.srcAccessMask            = vk::AccessFlagBits2::eTransferRead;
@@ -246,10 +267,10 @@ FaultManager::BdaWrites FaultManager::CollectBdaWrites() {
 	cleared.dstAccessMask            = vk::AccessFlagBits2::eTransferWrite;
 	cleared.buffer                   = m_fault_buffer.Handle();
 	cleared.offset                   = dropped_offset;
-	cleared.size                     = sizeof(uint32_t);
+	cleared.size                     = counters_size;
 	dependency.pBufferMemoryBarriers = &cleared;
 	command.pipelineBarrier2(dependency);
-	command.fillBuffer(m_fault_buffer.Handle(), dropped_offset, sizeof(uint32_t), 0);
+	command.fillBuffer(m_fault_buffer.Handle(), dropped_offset, counters_size, 0);
 	// The next BDA writer sees the cleared bitmap and counter; the host sees the list.
 	std::array<vk::BufferMemoryBarrier2, 2> after {};
 	after[0].srcStageMask =
@@ -289,6 +310,19 @@ FaultManager::BdaWrites FaultManager::CollectBdaWrites() {
 	result.pages.resize(stored);
 	std::memcpy(result.pages.data(), mapped + sizeof(uint64_t), stored * sizeof(uint64_t));
 	std::memcpy(&result.dropped, mapped + BdaPagesAreaSize, sizeof(uint32_t));
+	if (store_log) {
+		m_bda_download->Invalidate(BdaStoreLogOffset, sizeof(uint32_t));
+		uint32_t logged = 0;
+		std::memcpy(&logged, mapped + BdaStoreLogOffset, sizeof(logged));
+		const auto entries = std::min<size_t>(logged, BufferCache::BDA_STORE_LOG_ENTRIES);
+		result.log_overflow = logged - static_cast<uint32_t>(entries);
+		if (entries != 0) {
+			constexpr size_t first = BdaStoreLogOffset + 4 * sizeof(uint32_t);
+			m_bda_download->Invalidate(first, entries * sizeof(BdaStore));
+			result.stores.resize(entries);
+			std::memcpy(result.stores.data(), mapped + first, entries * sizeof(BdaStore));
+		}
+	}
 	return result;
 }
 

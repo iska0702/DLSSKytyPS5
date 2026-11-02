@@ -234,6 +234,10 @@ bool GraphicContext::CreateAllocator() {
 	VmaVulkanFunctions functions {};
 	functions.vkGetInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr;
 	functions.vkGetDeviceProcAddr   = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
+	// Through the dispatcher, so the KYTY_CMD_GUARD hooks (installed before the allocator) see
+	// the destruction of buffers and images; without the guard these are the driver's entries.
+	functions.vkDestroyBuffer = VULKAN_HPP_DEFAULT_DISPATCHER.vkDestroyBuffer;
+	functions.vkDestroyImage  = VULKAN_HPP_DEFAULT_DISPATCHER.vkDestroyImage;
 
 	VmaAllocatorCreateInfo info {};
 	info.instance         = instance;
@@ -304,6 +308,11 @@ void GraphicContext::DestroyAllocator() {
 	if (m_sparse_fence != nullptr) {
 		device.destroyFence(m_sparse_fence, nullptr);
 		m_sparse_fence = nullptr;
+	}
+	if (m_sparse_timeline != nullptr) {
+		WaitSparseBinds();
+		device.destroySemaphore(m_sparse_timeline, nullptr);
+		m_sparse_timeline = nullptr;
 	}
 	vmaDestroyAllocator(allocator);
 	allocator = nullptr;
@@ -417,7 +426,38 @@ bool GraphicContext::CreateSparseImage(const vk::ImageCreateInfo& info, uint32_t
 	return true;
 }
 
-void GraphicContext::BindSparseImageLevels(VulkanImage& image, uint32_t first_level) {
+uint64_t GraphicContext::SparseBindPendingValue() {
+	const auto signalled = m_sparse_signalled.load(std::memory_order_acquire);
+	if (signalled == 0 || m_sparse_completed.load(std::memory_order_relaxed) >= signalled) {
+		return 0;
+	}
+	uint64_t reached = 0;
+	if (device.getSemaphoreCounterValue(m_sparse_timeline, &reached) == vk::Result::eSuccess) {
+		uint64_t known = m_sparse_completed.load(std::memory_order_relaxed);
+		while (reached > known &&
+		       !m_sparse_completed.compare_exchange_weak(known, reached, std::memory_order_relaxed)) {
+		}
+		if (reached >= signalled) {
+			return 0;
+		}
+	}
+	return signalled;
+}
+
+void GraphicContext::WaitSparseBinds() {
+	const auto signalled = m_sparse_signalled.load(std::memory_order_acquire);
+	if (signalled == 0) {
+		return;
+	}
+	vk::SemaphoreWaitInfo wait {};
+	wait.semaphoreCount = 1;
+	wait.pSemaphores    = &m_sparse_timeline;
+	wait.pValues        = &signalled;
+	RequireVulkanSuccess(device.waitSemaphores(&wait, UINT64_MAX), "wait for sparse image binds");
+}
+
+void GraphicContext::BindSparseImageLevels(VulkanImage& image, uint32_t first_level,
+                                           vk::Semaphore wait_semaphore, uint64_t wait_value) {
 	EXIT_IF(!image.sparse || image.image == nullptr);
 	auto&      state  = *image.sparse;
 	const auto levels = image.mip_levels;
@@ -490,24 +530,38 @@ void GraphicContext::BindSparseImageLevels(VulkanImage& image, uint32_t first_le
 	bind_info.imageOpaqueBindCount = need_tail ? 1u : 0u;
 	bind_info.pImageOpaqueBinds    = &tail_info;
 	{
+		// Ordered on the GPU (graphicContext.h): after queue-0 work up to wait_value, before every
+		// queue-0 batch submitted from now on. Values are submitted in increasing order (one mutex).
 		std::scoped_lock lock(m_sparse_mutex);
-		if (m_sparse_fence == nullptr) {
-			vk::FenceCreateInfo fence_info {};
-			RequireVulkanSuccess(device.createFence(&fence_info, nullptr, &m_sparse_fence),
-			                     "create sparse binding fence");
+		if (m_sparse_timeline == nullptr) {
+			vk::SemaphoreTypeCreateInfo timeline_type {};
+			timeline_type.semaphoreType = vk::SemaphoreType::eTimeline;
+			vk::SemaphoreCreateInfo semaphore_info {};
+			semaphore_info.pNext = &timeline_type;
+			RequireVulkanSuccess(device.createSemaphore(&semaphore_info, nullptr, &m_sparse_timeline),
+			                     "create sparse binding timeline");
 		}
+		const uint64_t                  signal = m_sparse_signalled.load(std::memory_order_relaxed) + 1;
+		vk::TimelineSemaphoreSubmitInfo timeline {};
+		timeline.waitSemaphoreValueCount   = wait_semaphore ? 1u : 0u;
+		timeline.pWaitSemaphoreValues      = &wait_value;
+		timeline.signalSemaphoreValueCount = 1;
+		timeline.pSignalSemaphoreValues    = &signal;
+		bind_info.pNext                    = &timeline;
+		bind_info.waitSemaphoreCount       = wait_semaphore ? 1u : 0u;
+		bind_info.pWaitSemaphores          = &wait_semaphore;
+		bind_info.signalSemaphoreCount     = 1;
+		bind_info.pSignalSemaphores        = &m_sparse_timeline;
 		vk::Result result {};
 		if (side_queue != nullptr) {
 			Common::LockGuard queue_lock(side_queue_mutex);
-			result = side_queue.bindSparse(1, &bind_info, m_sparse_fence);
+			result = side_queue.bindSparse(1, &bind_info, nullptr);
 		} else {
 			Common::LockGuard queue_lock(queue_mutex);
-			result = queue.bindSparse(1, &bind_info, m_sparse_fence);
+			result = queue.bindSparse(1, &bind_info, nullptr);
 		}
 		RequireVulkanSuccess(result, "bind sparse image memory");
-		RequireVulkanSuccess(device.waitForFences(1, &m_sparse_fence, VK_TRUE, UINT64_MAX),
-		                     "wait for sparse image binding");
-		RequireVulkanSuccess(device.resetFences(1, &m_sparse_fence), "reset sparse binding fence");
+		m_sparse_signalled.store(signal, std::memory_order_release);
 	}
 	state.allocations.push_back(allocation);
 	state.bytes += bytes;
@@ -670,6 +724,24 @@ uint64_t GraphicContext::GetDeviceMemoryUsage() const {
 		}
 	}
 	return usage;
+}
+
+uint32_t GraphicContext::GetHeapUsage(std::span<HeapUsage, VK_MAX_MEMORY_HEAPS> heaps) const {
+	if (allocator == nullptr) {
+		return 0;
+	}
+	VmaBudget budgets[VK_MAX_MEMORY_HEAPS] {};
+	vmaGetHeapBudgets(allocator, budgets);
+	const auto count = physical_device_memory_properties.memoryHeapCount;
+	for (uint32_t heap = 0; heap < count; heap++) {
+		const auto& properties = physical_device_memory_properties.memoryHeaps[heap];
+		heaps[heap] = {.usage        = budgets[heap].usage,
+		               .budget       = budgets[heap].budget,
+		               .allocations  = budgets[heap].statistics.allocationCount,
+		               .device_local = static_cast<bool>(properties.flags &
+		                                                 vk::MemoryHeapFlagBits::eDeviceLocal)};
+	}
+	return count;
 }
 
 uint64_t GraphicContext::GetTotalMemoryBudget() const {

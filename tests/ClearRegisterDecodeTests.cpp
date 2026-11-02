@@ -42,9 +42,11 @@ void TestRgba16FloatUsesBothWords() {
 	Check(DecodePackedColorClear64(vk::Format::eR16G16B16A16Sfloat, 0, 0, clear),
 	      "RGBA16F zero clear decodes");
 	CheckFloat4(clear, 0.0f, 0.0f, 0.0f, 0.0f, "RGBA16F zero clear is all zero");
-	// The 32-bit decoder alone (the old DCC path) cannot describe a 64-bit texel.
-	Check(!DecodePackedColorClear(vk::Format::eR16G16B16A16Sfloat, 0, clear),
-	      "32-bit decoder rejects RGBA16F");
+	// The single-word decoder takes both register words as one 64-bit value (upstream 31b7be9ff).
+	clear.float32 = std::array {7.0f, 7.0f, 7.0f, 7.0f};
+	Check(DecodePackedColorClear(vk::Format::eR16G16B16A16Sfloat, 0x00003800c0003c00ull, clear),
+	      "64-bit word decoder accepts RGBA16F");
+	CheckFloat4(clear, 1.0f, -2.0f, 0.5f, 0.0f, "64-bit word RGBA16F channels match word0/word1");
 }
 
 void TestNarrowFormats() {

@@ -1,7 +1,10 @@
 #include "graphics/host_gpu/renderer/drawPrep/bindingPlan.h"
 
+#include "graphics/host_gpu/renderer/drawPrep/ownedCounters.h"
+
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "common/onceValue.h"
 #include "common/profiler.h"
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/host_gpu/graphicContext.h"
@@ -78,6 +81,11 @@ bool PlanRanges(const CompiledShaderInfo& program, const ResourceSnapshot& resou
 			continue;
 		}
 		if (LibKernel::Memory::ClampRangeSizeQuiet(address, requested_size) != requested_size) {
+			return false;
+		}
+		// KYTY_BUFFER_RANGE_FIXES' zero-stride payload rule: left to the serial path.
+		if (BufferRangeFixesEnabled() && descriptor.Stride() == 0 && descriptor.OutOfBounds() == 2 &&
+		    !program.info.buffers[i].scalar && program.info.buffers[i].max_byte_extent > requested_size) {
 			return false;
 		}
 		range.address = address;
@@ -228,10 +236,10 @@ bool PredictTargets(const GraphicContext& graphics, const HW::Context& ctx,
 	if (prepared.pixel_active) {
 		for (const auto& output: prepared.pixel_info.stage.program->info.outputs) {
 			if (output.kind == ShaderRecompiler::IR::StageOutputKind::Mrt) {
-				if (output.index >= 32u) {
+				if (output.location >= 32u) {
 					return false;
 				}
-				mrt_mask |= 1u << output.index;
+				mrt_mask |= 1u << output.location; // the colour target (KYTY_CB_SHADER_MASK_EXPORTS)
 			}
 		}
 	}
@@ -243,8 +251,14 @@ bool PredictTargets(const GraphicContext& graphics, const HW::Context& ctx,
 			continue;
 		}
 		const auto& rt = ctx.GetRenderTarget(slot);
-		if (rt.base.addr == 0 || render_target_mask_slot(ctx.GetRenderTargetMask(), slot) == 0) {
+		if (!render_target_bound(rt) || render_target_mask_slot(ctx.GetRenderTargetMask(), slot) == 0) {
 			continue; // no target in this slot
+		}
+		// KYTY_MRT_SPLIT (renderDraw.cpp): a surface bound to two slots splits the draw; no plan.
+		for (uint32_t index = 0; index < targets.color_count; index++) {
+			if (ctx.GetRenderTarget(targets.colors[index].slot).base.addr == rt.base.addr) {
+				return false;
+			}
 		}
 		const auto samples = render_sample_count(rt.attrib.num_fragments);
 		if (samples == 0 || rt.attrib.num_samples != rt.attrib.num_fragments) {
@@ -485,13 +499,14 @@ uint32_t BindingParts() {
 }
 
 int BindingsVerifyMode() {
-	static const int mode = [] {
+	static std::atomic<int64_t> mode_once {Common::OnceUnset};
+	const auto mode = static_cast<int>(Common::Once(mode_once, [] {
 		const auto* value = EnvValue("KYTY_DRAW_PREP_BINDINGS_VERIFY");
 		if (value == nullptr || std::strcmp(value, "0") == 0) {
 			return 0;
 		}
 		return std::strcmp(value, "exit") == 0 ? 2 : 1;
-	}();
+	}));
 	return mode;
 }
 
@@ -624,9 +639,9 @@ void ComputeBindingPlan(const BindingPlanContext& context, const RegisterSnapsho
 }
 
 void CountCommittedPlan(bool used) {
-	g_binding_totals.plans.fetch_add(1, std::memory_order_relaxed);
+	OwnedCounters::Add(g_binding_totals.plans, 1);
 	if (used) {
-		g_binding_totals.used.fetch_add(1, std::memory_order_relaxed);
+		OwnedCounters::Add(g_binding_totals.used, 1);
 	}
 	Profiler::CountFrameEvent(used ? Profiler::FrameEvent::DrawPrepBindingPlansUsed
 	                               : Profiler::FrameEvent::DrawPrepBindingPlansDropped);
@@ -649,7 +664,7 @@ const PipelineCache::Pipeline* PlannedPipeline(const PipelineCache& cache, const
 		return nullptr;
 	}
 	Profiler::CountFrameEvent(Profiler::FrameEvent::DrawPrepBindingPipelinesUsed);
-	g_binding_totals.pipelines_used.fetch_add(1, std::memory_order_relaxed);
+	OwnedCounters::Add(g_binding_totals.pipelines_used, 1);
 	return plan.pipeline;
 }
 

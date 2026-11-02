@@ -253,6 +253,9 @@ struct LogExecutor {
 	void dispatch(uint32_t x, uint32_t y, uint32_t z) {
 		Push(Op::Dispatch, VerifyHash::Value(Op::Dispatch, x, y, z));
 	}
+	void dispatchBase(uint32_t bx, uint32_t by, uint32_t bz, uint32_t x, uint32_t y, uint32_t z) {
+		Push(Op::DispatchBase, VerifyHash::Value(Op::DispatchBase, bx, by, bz, x, y, z));
+	}
 	void dispatchIndirect(vk::Buffer b, vk::DeviceSize o) {
 		Push(Op::DispatchIndirect, VerifyHash::Value(Op::DispatchIndirect, Bits(b), o));
 	}
@@ -277,6 +280,22 @@ struct LogExecutor {
 		Push(Op::WriteTimestamp2,
 		     VerifyHash::Value(Op::WriteTimestamp2, Bits(p), q,
 		                       static_cast<uint64_t>(static_cast<VkPipelineStageFlags2>(st))));
+	}
+	void hostCopy(void* d, uint64_t src, uint64_t n) {
+		Push(Op::HostCopy, VerifyHash::Value(Op::HostCopy, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(d)), src, n));
+	}
+	void writeBufferMarkerAMD(vk::PipelineStageFlagBits st, vk::Buffer b, vk::DeviceSize o, uint32_t m) {
+		Push(Op::WriteBufferMarker,
+		     VerifyHash::Value(Op::WriteBufferMarker, Bits(b), o,
+		                       static_cast<uint32_t>(static_cast<VkPipelineStageFlagBits>(st)), m));
+	}
+	void clearColorImage(vk::Image i, vk::ImageLayout l, const vk::ClearColorValue* c, uint32_t n,
+	                     const vk::ImageSubresourceRange* r) {
+		Push(Op::ClearColorImage, VerifyHash::ClearColorImage(i, l, *c, n, r));
+	}
+	void clearDepthStencilImage(vk::Image i, vk::ImageLayout l, const vk::ClearDepthStencilValue* v,
+	                            uint32_t n, const vk::ImageSubresourceRange* r) {
+		Push(Op::ClearDepthStencilImage, VerifyHash::ClearDepthStencilImage(i, l, *v, n, r));
 	}
 };
 
@@ -737,6 +756,12 @@ public:
 				                                          LogExecutor::Bits(cb), co, m, s)});
 				break;
 			}
+			case Op::DispatchBase: {
+				const uint32_t bx = U32(), by = U32(), bz = U32(), x = U32(), y = U32(), z = U32();
+				e.dispatchBase(bx, by, bz, x, y, z);
+				expected.push_back({op, VerifyHash::Value(op, bx, by, bz, x, y, z)});
+				break;
+			}
 			case Op::DispatchIndirect: {
 				const auto b = H<vk::Buffer>();
 				const auto o = U64() & 0xfff0;
@@ -792,6 +817,50 @@ public:
 				                           static_cast<uint64_t>(
 				                               static_cast<VkPipelineStageFlags2>(
 				                                   vk::PipelineStageFlags2(stage))))});
+				break;
+			}
+			case Op::WriteBufferMarker: {
+				const auto     b      = H<vk::Buffer>();
+				const auto     o      = U64() & 0xffcu;
+				const uint32_t m      = U32();
+				const auto     stage  = (U32() & 1u) != 0 ? vk::PipelineStageFlagBits::eTopOfPipe
+				                                         : vk::PipelineStageFlagBits::eBottomOfPipe;
+				e.writeBufferMarkerAMD(stage, b, o, m);
+				expected.push_back({op, VerifyHash::Value(op, LogExecutor::Bits(b), o,
+				                                          static_cast<uint32_t>(static_cast<VkPipelineStageFlagBits>(stage)),
+				                                          m)});
+				break;
+			}
+			case Op::HostCopy: {
+				// Encoded only: the log executor checks the stream order and fields.
+				auto*          d   = reinterpret_cast<void*>(static_cast<uintptr_t>(U64() & ~uint64_t {7}));
+				const uint64_t src = U64();
+				const uint64_t sz  = 1 + Below(4096);
+				e.hostCopy(d, src, sz);
+				expected.push_back({op, VerifyHash::Value(op, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(d)), src, sz)});
+				break;
+			}
+			case Op::ClearColorImage:
+			case Op::ClearDepthStencilImage: {
+				std::vector<vk::ImageSubresourceRange> ranges(n);
+				for (auto& r: ranges) {
+					r = vk::ImageSubresourceRange {vk::ImageAspectFlagBits::eColor, Below(4),
+					                               1 + Below(3), Below(2), 1 + Below(2)};
+				}
+				const auto i = H<vk::Image>();
+				const auto l = vk::ImageLayout::eTransferDstOptimal;
+				if (op == Op::ClearColorImage) {
+					vk::ClearColorValue color {};
+					color.uint32 = {{U32(), U32(), U32(), U32()}};
+					e.clearColorImage(i, l, &color, n, ranges.data());
+					expected.push_back({op, VerifyHash::ClearColorImage(i, l, color, n, ranges.data())});
+				} else {
+					const vk::ClearDepthStencilValue value {static_cast<float>(Below(1000)) / 999.0f,
+					                                        U32() & 0xffu};
+					e.clearDepthStencilImage(i, l, &value, n, ranges.data());
+					expected.push_back(
+					    {op, VerifyHash::ClearDepthStencilImage(i, l, value, n, ranges.data())});
+				}
 				break;
 			}
 			default: break;

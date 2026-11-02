@@ -8,11 +8,13 @@
 #include "graphics/host_gpu/queueSubmission.h"
 #include "graphics/host_gpu/vulkanCommon.h" // IWYU pragma: export
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <tuple>
 #include <vector>
 #include <vk_mem_alloc.h>
@@ -36,6 +38,7 @@ struct DiagnosticCheckpoint {
 	uint64_t vs = 0;
 	uint64_t ps = 0;
 	uint64_t cs = 0;
+	uint32_t queue = 0; // GpuBreadcrumbs::Queue
 };
 
 struct GraphicContext;
@@ -44,6 +47,16 @@ struct GraphicContext;
 RecordDiagnosticCheckpoint(const DiagnosticCheckpoint& checkpoint);
 [[nodiscard]] bool DeviceFaultDiagnosticsEnabled();
 void DumpDeviceLossDiagnostics(GraphicContext& graphics, uint64_t tick = 0, bool queue_locked = false);
+// A thread about to exit on a device loss: lets a device-loss report another thread is writing
+// (the VK_EXT_device_fault vendor dump, _device_fault.nv-gpudmp) finish first. Waits up to
+// `start_ms` for one to begin and then up to 10 s for it to end.
+void WaitForDeviceLossDiagnostics(uint32_t start_ms = 500);
+// Breadcrumb ring access (GpuBreadcrumbs): records and returns the sequence number; looks one up
+// (false once it left the bounded history); the newest sequence; an operation's name.
+[[nodiscard]] uint64_t RecordDiagnosticSequence(const DiagnosticCheckpoint& checkpoint);
+[[nodiscard]] bool     LookupDiagnosticCheckpoint(uint64_t sequence, DiagnosticCheckpoint* checkpoint);
+[[nodiscard]] uint64_t NewestDiagnosticSequence();
+[[nodiscard]] const char* DiagnosticOpName(uint32_t op);
 
 struct GraphicContext {
 	vk::Instance                       instance                              = nullptr;
@@ -56,6 +69,13 @@ struct GraphicContext {
 	bool                               memory_budget_ext_enabled             = false;
 	bool                               diagnostic_checkpoints_enabled        = false;
 	bool                               device_fault_enabled                  = false;
+	// KYTY_GPU_BREADCRUMBS (gpuBreadcrumbs.h): VK_AMD_buffer_marker enabled for breadcrumbs, and
+	// VK_AMD_device_coherent_memory's deviceCoherentMemory for their buffer.
+	bool                               gpu_breadcrumbs_requested             = false;
+	bool                               device_coherent_memory_enabled        = false;
+	// KYTY_COMPUTE_WAVE64=0: wave64 compute programs run two guest lanes per invocation on 32-wide
+	// subgroups (the path NVIDIA takes) even where the device could run them natively.
+	bool                               compute_wave64_split                  = false;
 	bool                               compute_subgroup_size_control_enabled = false;
 	// subgroupSizeControl is enabled: the device has more than one subgroup size.
 	bool                               subgroup_size_control_enabled         = false;
@@ -72,11 +92,16 @@ struct GraphicContext {
 	// VK_EXT_depth_clip_enable: depth clipping set apart from the always-on depth clamp (the DB's
 	// behaviour). Without it, pipelines clamp only where the guest turns Z clipping off.
 	bool                               depth_clip_enable_enabled             = false;
+	bool                               conditional_rendering_enabled         = false;
 	bool                               supports_block_texel_view              = false;
 	// shaderStorageImageReadWithoutFormat (TileManager::TileFromImage).
 	bool                               storage_image_read_without_format_enabled = false;
 	// Vulkan 1.2 samplerFilterMinmax: S# FILTER_MODE min/max (SamplerCache).
 	bool                               sampler_filter_minmax_enabled         = false;
+	// Vulkan 1.2 shaderStorageBufferArrayNonUniformIndexing, enabled when supported (upstream
+	// made it a hard requirement in fd66f580b; shaders that index storage-buffer arrays
+	// non-uniformly need it).
+	bool                               storage_buffer_array_non_uniform_indexing_enabled = false;
 	// VK_KHR_maintenance8: vkCmdCopyImage between a depth aspect and a compatible color format
 	// (D32 <-> R32, D16 <-> R16). KYTY_DIRECT_IMAGE_COPY_M8=0 leaves the extension disabled.
 	bool                               maintenance8_enabled                  = false;
@@ -160,7 +185,7 @@ struct GraphicContext {
 	}
 
 	[[nodiscard]] bool SupportsComputeWave64() const noexcept {
-		return subgroup_size == 64u || compute_subgroup_size_control_enabled;
+		return !compute_wave64_split && (subgroup_size == 64u || compute_subgroup_size_control_enabled);
 	}
 
 	// The subgroup size a graphics stage must require so that one host subgroup is one guest
@@ -206,6 +231,14 @@ struct GraphicContext {
 	[[nodiscard]] bool CanReportMemoryUsage() const noexcept { return memory_budget_ext_enabled; }
 	[[nodiscard]] uint64_t GetDeviceMemoryUsage() const;
 	[[nodiscard]] uint64_t GetTotalMemoryBudget() const;
+
+	struct HeapUsage {
+		uint64_t usage        = 0; // Whole process, as reported by VK_EXT_memory_budget.
+		uint64_t budget       = 0;
+		uint32_t allocations  = 0;
+		bool     device_local = false;
+	};
+	[[nodiscard]] uint32_t GetHeapUsage(std::span<HeapUsage, VK_MAX_MEMORY_HEAPS> heaps) const;
 	[[nodiscard]] bool     CreateImage(const vk::ImageCreateInfo& info, VulkanImage& image);
 	void                   DeleteImage(VulkanImage& image);
 	// KYTY_VRAM_STATS report lines (vramStats.h): VMA heaps, allocation kinds, native image pool.
@@ -220,12 +253,27 @@ struct GraphicContext {
 	// residency image with memory bound behind levels >= first_level only (a single-layer,
 	// single-sample 2D image whose format, usage and flags support sparse residency; false and
 	// nothing created otherwise). BindSparseImageLevels binds memory behind levels >= first_level
-	// that have none yet. Both wait until the binding is done: unbound levels read as zero
-	// (residencyNonResidentStrict) and writes to them are discarded, so only levels a view can
-	// sample need memory. DeleteImage frees the memory.
+	// that have none yet: unbound levels read as zero (residencyNonResidentStrict) and writes to them
+	// are discarded, so only levels a view can sample need memory. DeleteImage frees the memory.
+	//
+	// Ordering (Bug A): the binds run on the side queue and are ordered on the GPU, never waited for
+	// on the host. A bind waits for `wait_semaphore` >= `wait_value` (the master timeline at the last
+	// queue-0 tick that may use the image; that tick must already be submitted) and signals
+	// SparseBindSemaphore(); every queue-0 batch submitted after it waits for that signal
+	// (SparseBindPendingValue, CommandScheduler::Submit). Vulkan forbids other queues to access a
+	// range while its binding changes, and the image's whole-chain layout transitions (needed
+	// because sampled views span non-resident levels) access the levels being bound.
 	[[nodiscard]] bool     CreateSparseImage(const vk::ImageCreateInfo& info, uint32_t first_level,
 	                                         VulkanImage& image);
-	void                   BindSparseImageLevels(VulkanImage& image, uint32_t first_level);
+	void                   BindSparseImageLevels(VulkanImage& image, uint32_t first_level,
+	                                             vk::Semaphore wait_semaphore = nullptr,
+	                                             uint64_t      wait_value     = 0);
+	// The timeline semaphore image binds signal, and the newest value signalled by a bind that may
+	// not have completed (0: none pending). Null semaphore until the first bind.
+	[[nodiscard]] vk::Semaphore SparseBindSemaphore() const noexcept { return m_sparse_timeline; }
+	[[nodiscard]] uint64_t      SparseBindPendingValue();
+	// Host wait for every image bind submitted so far (teardown, tests).
+	void                        WaitSparseBinds();
 	// The device memory behind an image: its allocation's size, or the bound bytes of a sparse one.
 	[[nodiscard]] uint64_t NativeImageBytes(const VulkanImage& image) const;
 
@@ -236,6 +284,9 @@ private:
 	[[nodiscard]] bool SparseImageSupported(const vk::ImageCreateInfo& info);
 	std::mutex                                 m_sparse_mutex;
 	vk::Fence                                  m_sparse_fence = nullptr;
+	vk::Semaphore                              m_sparse_timeline = nullptr;
+	std::atomic<uint64_t>                      m_sparse_signalled {0}; // newest value a bind signals
+	std::atomic<uint64_t>                      m_sparse_completed {0}; // known reached on the GPU
 	std::map<std::tuple<vk::Format, vk::ImageUsageFlags, vk::ImageCreateFlags>, bool>
 	                                           m_sparse_support;
 	struct RetiredNativeImage {

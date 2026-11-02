@@ -211,6 +211,18 @@ Value ResolveInvariantPhi(const ResourcePlan& program, Value value) {
 	return invariant;
 }
 
+Value ResolveActiveU32(Value value, Value active) {
+	for (uint32_t depth = 0; depth <= 32; ++depth) {
+		value = value.Resolve();
+		const auto* inst = value.TryInstruction();
+		if (inst == nullptr || inst->GetOpcode() != ValueOpcode::SelectU32 ||
+		    inst->Arg(0).Resolve() != active)
+			return value;
+		value = inst->Arg(1);
+	}
+	return {};
+}
+
 bool HasShaderMemoryWrites(const Program& program) {
 	for (const auto* block: program.blocks) {
 		for (const auto& inst: *block) {
@@ -495,8 +507,12 @@ void ValidateProgram(const Program& program, bool require_ssa) {
 				      memory.SupportsIndirectRawWrite(inst.GetOpcode()))) {
 					return Fail("indirect buffer requires a raw DWORD x2/x3/x4 load");
 				}
+				const auto access = BufferAccessOf(inst.GetOpcode());
+				const bool packed_formatted =
+				    (access == BufferAccess::Read || access == BufferAccess::Write) && memory.formatted &&
+				    memory.data_bits == 16u && (memory.component_count + 1u) / 2u == buffer_components;
 				if (buffer_components > 1u &&
-				    (!vector_buffer || memory.data_bits != 32u ||
+				    (!vector_buffer || (memory.data_bits != 32u && !packed_formatted) ||
 				     memory.data_dwords != buffer_components || memory.component_index != 0u)) {
 					return Fail(fmt::format("{} has inconsistent native-wide metadata",
 					                        ValueOpcodeName(inst.GetOpcode())));
@@ -691,6 +707,142 @@ void ResolveControlFlowIdentities(Program& program) {
 		info.condition       = info.condition.Resolve();
 		info.indirect_target = info.indirect_target.Resolve();
 	}
+}
+
+namespace {
+
+// Every value and instruction pointer the resource-plan tables hold (not the blocks' branch
+// conditions and selectors).
+template <typename P, typename OnValue, typename OnInst>
+void ForEachPlanReference(P& program, OnValue&& on_value, OnInst&& on_inst) {
+	for (auto& descriptor: program.descriptor_sources) {
+		for (auto& value: descriptor.dwords) {
+			on_value(value);
+		}
+		if (descriptor.indirect_descriptor) {
+			on_value(descriptor.indirect_descriptor->key_count);
+			on_value(descriptor.indirect_descriptor->selector_first);
+			on_value(descriptor.indirect_descriptor->selector_mask);
+		}
+	}
+	for (auto& block: program.control_flow) {
+		on_value(block.condition);
+	}
+	for (auto& read: program.srt_reads) {
+		on_value(read.value);
+	}
+	for (auto& recipe: program.evaluation_recipes) {
+		on_inst(recipe.instruction);
+		on_value(recipe.selection_mask);
+	}
+	for (auto& instruction: program.arithmetic_tape_instructions) {
+		on_inst(instruction.instruction);
+	}
+	for (auto& value: program.uniform_fill.values) {
+		on_value(value);
+	}
+	for (auto& value: program.dynamic_reads) {
+		on_value(value);
+	}
+}
+
+// The referenced instructions that the program still owns. Only addresses are compared: a
+// reference to an erased instruction must never be dereferenced (its memory may already hold
+// another thread's data).
+std::unordered_set<const Inst*> LivePlanReferences(const Program& program) {
+	std::unordered_set<const Inst*> referenced;
+	ForEachPlanReference(
+	    program,
+	    [&](const Value& value) {
+		    if (const auto* inst = value.TryInstruction(); inst != nullptr) {
+			    referenced.insert(inst);
+		    }
+	    },
+	    [&](const Inst* inst) {
+		    if (inst != nullptr) {
+			    referenced.insert(inst);
+		    }
+	    });
+	std::unordered_set<const Inst*> live;
+	if (referenced.empty()) {
+		return live;
+	}
+	const auto note = [&](const Inst& inst) {
+		if (referenced.contains(&inst)) {
+			live.insert(&inst);
+		}
+	};
+	for (const auto& block: program.block_storage) {
+		if (block != nullptr) {
+			for (const auto& inst: *block) {
+				note(inst);
+			}
+		}
+	}
+	for (const auto& inst: program.value_storage) {
+		note(inst);
+	}
+	return live;
+}
+
+} // namespace
+
+size_t CountDeadPlanReferences(const Program& program) {
+	const auto live  = LivePlanReferences(program);
+	size_t     count = 0;
+	ForEachPlanReference(
+	    program,
+	    [&](const Value& value) {
+		    const auto* inst = value.TryInstruction();
+		    count += inst != nullptr && !live.contains(inst) ? 1u : 0u;
+	    },
+	    [&](const Inst* inst) { count += inst != nullptr && !live.contains(inst) ? 1u : 0u; });
+	return count;
+}
+
+size_t DropDeadPlanReferences(Program& program) {
+	const auto live    = LivePlanReferences(program);
+	size_t     dropped = 0;
+	ForEachPlanReference(
+	    program,
+	    [&](Value& value) {
+		    const auto* inst = value.TryInstruction();
+		    if (inst != nullptr && !live.contains(inst)) {
+			    value = Value {};
+			    dropped++;
+		    }
+	    },
+	    [&](const Inst*& inst) {
+		    if (inst != nullptr && !live.contains(inst)) {
+			    inst = nullptr;
+			    dropped++;
+		    }
+	    });
+	return dropped;
+}
+
+size_t ResolvePlanIdentities(Program& program) {
+	size_t resolved = 0;
+	ForEachPlanReference(
+	    program,
+	    [&](Value& value) {
+		    if (value.IsIdentity()) {
+			    value = value.Resolve();
+			    resolved++;
+		    }
+	    },
+	    [&](const Inst*& inst) {
+		    if (inst == nullptr || inst->GetOpcode() != ValueOpcode::Identity) {
+			    return;
+		    }
+		    // An identity of an immediate names no instruction: DropDeadPlanReferences clears it.
+		    if (auto* target = Value(const_cast<Inst*>(inst)).Resolve().TryInstruction();
+		        target != nullptr) {
+			    inst = target;
+			    resolved++;
+		    }
+	    });
+	return resolved;
 }
 
 std::string ProgramToString(const Program& program) {

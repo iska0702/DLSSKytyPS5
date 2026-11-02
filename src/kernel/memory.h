@@ -15,6 +15,23 @@ namespace Libs::LibKernel::Memory {
 void Initialize();
 void Shutdown();
 
+// Guest memory usage for the performance panel. Takes only bookkeeping locks, so it never
+// waits on the GPU; call it only while the memory subsystem is initialized.
+struct DebugStats {
+	uint64_t direct_total        = 0;
+	uint64_t direct_allocated    = 0; // sceKernelAllocateDirectMemory.
+	uint64_t pooled_allocated    = 0; // Memory pool expansions.
+	uint64_t automatic_allocated = 0; // Extended memory.
+	uint64_t direct_mapped       = 0;
+	uint64_t flexible_total      = 0;
+	uint64_t flexible_used       = 0;
+	uint64_t pool_committed      = 0;
+	uint64_t cpu_page_entries    = 0; // 2 MiB page-table entries in use.
+	uint64_t gpu_page_entries    = 0;
+	uint64_t page_entries_total  = 0; // Per side.
+};
+[[nodiscard]] DebugStats GetDebugStats();
+
 struct Lifecycle {
 	static constexpr const char* name       = "Memory";
 	static constexpr auto        initialize = Libs::LibKernel::Memory::Initialize;
@@ -107,6 +124,9 @@ static_assert(sizeof(KernelMemoryPoolBlockStats) == 16,
 
 void                   RegisterCallbacks(callback_func_t alloc_func, callback_func_t free_func);
 void                   SetFlexibleMemorySize(uint64_t size);
+// Upstream 259a40abf: an AMM unmap that accepts holes (an AMPR AMM unmap command), 16 KiB
+// aligned. Upstream's MapAutomaticMemory/automatic AllocateDirectMemory are not in this line.
+int UnmapAmmMemory(uint64_t vaddr, size_t size);
 bool                   TryWriteBacking(uint64_t vaddr, const void* data, uint64_t size);
 bool                   TryReadBacking(uint64_t vaddr, void* data, uint64_t size);
 // TryReadBacking whose destination may hold partial bytes when it fails (the caller discards it
@@ -144,12 +164,19 @@ bool HashGpuCleanBacking(uint64_t vaddr, uint64_t size, uint64_t& digest,
 // The clean verdict of TryReadGpuCleanBacking without reading bytes (GPU thread; true for
 // ranges outside GPU memory).
 [[nodiscard]] bool     IsGpuCleanForRead(uint64_t vaddr, uint64_t size);
+// After a clean coherence-log check of the range over [since, now] (DrawPrep::Validate,
+// KYTY_DRAW_PREP_CLEAN_SINCE): IsGpuCleanForRead with page verdicts kept since `since`.
+[[nodiscard]] bool     IsGpuCleanForReadSince(uint64_t vaddr, uint64_t size, uint64_t since);
 // Whether [vaddr, vaddr + size) lies in guest memory mapped for the GPU (the renderer's mapped
 // ranges, the same ones its fault handler resolves). False before InstallGpuResources.
 [[nodiscard]] bool     IsGpuMapped(uint64_t vaddr, uint64_t size);
 // May submit/wait only at GPU preparation boundaries, outside texture-cache/tracker locks.
 bool                   SynchronizeGpuBackingForRead(uint64_t vaddr, uint64_t size);
-bool                   TryReadPrtBacking(uint64_t vaddr, void* data, uint64_t size);
+bool                   TryReadSparseBacking(uint64_t vaddr, void* data, uint64_t size);
+// Upstream's descriptor-dependency reader (57cf08688/783d9f8d6): on the GPU thread, GPU-dirty
+// buffer bytes are read back first, then the backing is read.
+bool                   TryReadBufferBacking(uint64_t vaddr, void* data, uint64_t size);
+bool                   CopySparseMemory(uint64_t vaddr, void* data, uint64_t size);
 [[nodiscard]] uint64_t ClampRangeSize(uint64_t vaddr, uint64_t size);
 // ClampRangeSize's answer without its log or exit (0: not committed, or no ranges yet). Any thread.
 [[nodiscard]] uint64_t ClampRangeSizeQuiet(uint64_t vaddr, uint64_t size);
@@ -158,6 +185,8 @@ bool                   TryReadPrtBacking(uint64_t vaddr, void* data, uint64_t si
 [[nodiscard]] uint64_t VirtualRangesGeneration() noexcept;
 void                   WriteBacking(uint64_t vaddr, const void* data, uint64_t size) noexcept;
 void                   InvalidateMemory(uint64_t vaddr, uint64_t size);
+// RenderContext::PrepareHostOverwrite (KYTY_APR_PREPARE_WRITE): false when nothing was watched.
+bool                   PrepareHostOverwrite(uint64_t vaddr, uint64_t size);
 void                   InstallGpuResources(Graphics::RenderContext* renderer) noexcept;
 [[nodiscard]] bool HandleGpuFault(Graphics::PageFaultAccess access, uint64_t fault_vaddr) noexcept;
 
@@ -239,6 +268,11 @@ struct TestClampTotals {
 	uint64_t verify_races      = 0;
 };
 TestClampTotals TestClampRangeMemoTotals();
+void     TestSetGpuRangeCallback(void (*callback)(bool mapped, uint64_t addr, size_t size));
+void     TestBeforeNextBackingMap(callback_func_t callback);
+void     TestSetBackingReadCallback(callback_func_t callback);
+// The backing store's sparse read without TryReadSparseBacking's range checks.
+bool     TestTryReadSparseBacking(uint64_t vaddr, void* data, uint64_t size);
 void     TestFailNextPhysicalMemoryUnmap();
 void     TestFailPhysicalMemoryUnmapAfter(uint32_t successful_unmaps);
 void     TestFailGuestBackingStoreUnmapAfter(uint32_t successful_unmaps);

@@ -149,8 +149,13 @@ void Translator::V_CVT_PKRTZ_F16_F32(const Decoder::Instruction& inst) {
 }
 
 void Translator::V_CVT_PKNORM_F32(const Decoder::Instruction& inst, IR::ValueOpcode opcode) {
-	const auto lhs  = ReadOperand(SourceAt(inst, 0), IR::Type::F32);
-	const auto rhs  = ReadOperand(SourceAt(inst, 1), IR::Type::F32);
+	// A NaN source converts to 0 (the D3D rule the hardware follows); GLSL pack*Norm2x16 leaves it
+	// undefined and the host returned 0x7fff for snorm.
+	const auto zero = IR::F32(IR::Value::F32(0.0f));
+	const auto lhs0 = IR::F32(ReadOperand(SourceAt(inst, 0), IR::Type::F32));
+	const auto rhs0 = IR::F32(ReadOperand(SourceAt(inst, 1), IR::Type::F32));
+	const auto lhs  = SelectF32(IR::U1(ir.Emit(IR::ValueOpcode::FPIsNan32, {lhs0})), zero, lhs0);
+	const auto rhs  = SelectF32(IR::U1(ir.Emit(IR::ValueOpcode::FPIsNan32, {rhs0})), zero, rhs0);
 	const auto pair = ir.Emit(IR::ValueOpcode::CompositeConstructF32x2, {lhs, rhs});
 	WriteOperand(DestinationOperand(inst), ir.Emit(opcode, {pair}));
 }

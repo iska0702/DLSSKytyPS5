@@ -9,16 +9,20 @@
 #include "common/platform/sysTimer.h"
 #include "common/stringUtils.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <mutex>
 #include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
 #include <utime.h>
+#include <vector>
 
 // NOLINTNEXTLINE(readability-identifier-naming)
 enum sys_file_type_t {
@@ -81,15 +85,61 @@ static void apply_cache_hint(FILE* f, sys_file_cache_type_t cache_type) {
 #endif
 }
 
+static std::atomic<uint64_t> g_read_fallback_count {0};
+
 uint64_t SysFileReadFallbackCount() {
-	return 0;
+	return g_read_fallback_count.load(std::memory_order_relaxed);
+}
+
+// The kernel cannot write into guest pages the emulator has write-protected (GPU write
+// tracking): read() returns EFAULT (fread: a short count with the error flag set) after the
+// bytes before the first such page, and no fault handler runs for a kernel copy. Read the rest
+// through a bounded per-thread host buffer and copy with ordinary user-mode stores, which go
+// through the emulator's fault handling (as the Windows build does for ERROR_NOACCESS).
+static size_t ReadFileViaBounceBuffer(FILE* f, void* data, size_t size) {
+	constexpr size_t                  chunk_size = size_t {1} << 20u;
+	thread_local std::vector<uint8_t> chunk;
+	if (chunk.size() < std::min(chunk_size, size)) {
+		chunk.resize(std::min(chunk_size, size));
+	}
+	size_t total = 0;
+	while (total < size) {
+		const size_t step = std::min(chunk_size, size - total);
+		const size_t got  = fread(chunk.data(), 1, step, f);
+		if (got == 0) {
+			break;
+		}
+		std::memcpy(static_cast<uint8_t*>(data) + total, chunk.data(), got);
+		total += got;
+		if (got < step) {
+			break;
+		}
+	}
+	return total;
+}
+
+static size_t ReadFileIntoMemory(FILE* f, void* data, size_t size) {
+	const size_t w = fread(data, 1, size, f);
+	if (w == size || feof(f) != 0 || ferror(f) == 0) {
+		return w;
+	}
+	const int error = errno;
+	clearerr(f);
+	static std::once_flag once;
+	std::call_once(once, [error] {
+		printf("SysFileRead: read into guest memory failed (errno %d), reading through a host "
+		       "buffer\n",
+		       error);
+	});
+	g_read_fallback_count.fetch_add(1, std::memory_order_relaxed);
+	return w + ReadFileViaBounceBuffer(f, static_cast<uint8_t*>(data) + w, size - w);
 }
 
 void SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read) {
 	if (f.type == SYS_FILE_FILE) {
-		size_t w = fread(data, 1, size, f.f);
+		const size_t w = ReadFileIntoMemory(f.f, data, size);
 		if (bytes_read != nullptr) {
-			*bytes_read = w;
+			*bytes_read = static_cast<uint32_t>(w);
 		}
 	} else if (f.type == SYS_FILE_MEMORY_STAT) {
 		uint32_t s = size;
@@ -156,42 +206,29 @@ void SysFileWrite(const void* data, uint32_t size, sys_file_t& f, uint32_t* byte
 	}
 }
 
-sys_file_t* SysFileCreate(const std::filesystem::path& file_name) {
+static sys_file_t* OpenHostFile(const std::filesystem::path& file_name, const char* mode,
+                               sys_file_cache_type_t cache_type) {
 	auto* ret = new sys_file_t;
-
-	auto real_name     = get_internal_name(file_name);
-	auto real_name_str = real_name.string();
-
-	ret->f = fopen(real_name_str.c_str(), "w+");
-
-	if (ret->f == nullptr) {
-		printf("can't create file: %s\n", real_name_str.c_str());
+	ret->f = fopen(get_internal_name(file_name).c_str(), mode);
+	ret->type = ret->f == nullptr ? SYS_FILE_ERROR : SYS_FILE_FILE;
+	if (ret->f != nullptr) {
+		// Independent handles must observe writes and truncation immediately.
+		setvbuf(ret->f, nullptr, _IONBF, 0);
+		apply_cache_hint(ret->f, cache_type);
 	}
+	return ret;
+}
 
-	ret->type = SYS_FILE_FILE;
-
+sys_file_t* SysFileCreate(const std::filesystem::path& file_name) {
+	auto* ret = OpenHostFile(file_name, "w+", SYS_FILE_CACHE_AUTO);
+	if (ret->f == nullptr) {
+		printf("can't create file: %s\n", file_name.c_str());
+	}
 	return ret;
 }
 
 sys_file_t* SysFileOpenR(const std::filesystem::path& file_name, sys_file_cache_type_t cache_type) {
-	auto* ret = new sys_file_t;
-
-	ret->type = SYS_FILE_FILE;
-
-	auto internal_name     = get_internal_name(file_name);
-	auto internal_name_str = internal_name.string();
-
-	FILE* f = fopen(internal_name_str.c_str(), "r");
-
-	if (f == nullptr) {
-		ret->type = SYS_FILE_ERROR;
-	}
-
-	apply_cache_hint(f, cache_type);
-
-	ret->f = f;
-
-	return ret;
+	return OpenHostFile(file_name, "r", cache_type);
 }
 
 sys_file_t* SysFileOpen(uint8_t* buf, uint32_t buf_size) {
@@ -219,46 +256,12 @@ sys_file_t* SysFileCreate() {
 }
 
 sys_file_t* SysFileOpenW(const std::filesystem::path& file_name, sys_file_cache_type_t cache_type) {
-	auto* ret = new sys_file_t;
-
-	auto real_name     = get_internal_name(file_name);
-	auto real_name_str = real_name.string();
-
-	FILE* f = fopen(real_name_str.c_str(), "r+");
-
-	if (f == nullptr) {
-		ret->type = SYS_FILE_ERROR;
-	} else {
-		ret->type = SYS_FILE_FILE;
-	}
-
-	apply_cache_hint(f, cache_type);
-
-	ret->f = f;
-
-	return ret;
+	return OpenHostFile(file_name, "r+", cache_type);
 }
 
 sys_file_t* SysFileOpenRw(const std::filesystem::path& file_name,
                           sys_file_cache_type_t        cache_type) {
-	auto* ret = new sys_file_t;
-
-	auto real_name     = get_internal_name(file_name);
-	auto real_name_str = real_name.string();
-
-	FILE* f = fopen(real_name_str.c_str(), "r+");
-
-	if (f == nullptr) {
-		ret->type = SYS_FILE_ERROR;
-	} else {
-		ret->type = SYS_FILE_FILE;
-	}
-
-	apply_cache_hint(f, cache_type);
-
-	ret->f = f;
-
-	return ret;
+	return OpenHostFile(file_name, "r+", cache_type);
 }
 
 void SysFileClose(sys_file_t* f) {
@@ -418,7 +421,7 @@ bool SysFileDeleteFile(const std::filesystem::path& name) {
 
 bool SysFileFlush(sys_file_t& f) {
 	if (f.type == SYS_FILE_FILE && f.f != nullptr) {
-		return (fflush(f.f) == 0);
+		return fflush(f.f) == 0 && fsync(fileno(f.f)) == 0;
 	}
 
 	return false;

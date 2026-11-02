@@ -4,6 +4,7 @@
 #include "common/hangWatchdog.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
+#include "common/spinGate.h"
 #include "common/threads.h"
 #include "graphics/guest_gpu/command_processor/commandProcessor.h"
 
@@ -140,6 +141,8 @@ void Sequencer::NoteHandoffDone(uint64_t submission) {
 bool Sequencer::WaitSlow(const ReadyRef& ready, uint64_t wake_at, uint64_t rewake_at) {
 	Profiler::ScopedFrameWait frame_wait(Profiler::FrameWait::CpSeqSequencerWait);
 	auto                      start = NowNs();
+	// KYTY_SPIN_GATE: the wait spins only while the PC keeps CPUs idle.
+	const uint64_t spin_ns = Common::SpinGate::SpinAllowed() ? m_spin_ns : 0;
 	for (uint32_t spins = 0;; spins++) {
 		if (ready()) {
 			return true;
@@ -147,7 +150,7 @@ bool Sequencer::WaitSlow(const ReadyRef& ready, uint64_t wake_at, uint64_t rewak
 		if (Stopping()) {
 			return false;
 		}
-		if ((spins & 63u) != 63u || NowNs() - start < m_spin_ns) {
+		if ((spins & 63u) != 63u || NowNs() - start < spin_ns) {
 			Relax();
 			continue;
 		}

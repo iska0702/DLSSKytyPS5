@@ -4,7 +4,9 @@
 #include "common/hangWatchdog.h"
 #include "common/profiler.h"
 #include "graphics/guest_gpu/graphicsRun.h"
+#include "common/debugCounters.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/renderer/drawPrep/cpGaps.h"
 
 #include <cinttypes>
 #include <optional>
@@ -67,6 +69,12 @@ void MasterSemaphore::Wait(uint64_t tick) {
 	if (IsFree(tick)) {
 		return;
 	}
+	// KYTY_CP_GAP_STATS (GPU thread only): readback drains, occlusion publication, the rest.
+	const auto      reason = Profiler::CurrentGpuWaitReason();
+	const CpGaps::Scope gap(reason == Profiler::FrameWait::GpuWaitDrain ? CpGaps::Cat::GpuWaitDrain
+	                        : reason == Profiler::FrameWait::GpuWaitOcclusion
+	                            ? CpGaps::Cat::GpuWaitOcclusion
+	                            : CpGaps::Cat::GpuWaitOther);
 	// Attribute CP-thread blocking to its caller (Profiler::ScopedGpuWaitReason). Other threads
 	// (the completion runner, guest threads) wait here by design and are not counted.
 	std::optional<Profiler::ScopedFrameWait> frame_wait;
@@ -101,6 +109,8 @@ void MasterSemaphore::Wait(uint64_t tick) {
 	                         reinterpret_cast<uint64_t>(static_cast<VkSemaphore>(m_semaphore)),
 	                         tick, HangWatchdog::Enabled() ? KnownGpuTick() : 0, 0,
 	                         HangWatchdog::Enabled() ? CurrentTick() : 0);
+	Common::DebugCounters::ScopedTimer timer(Common::DebugCounters::Counter::GpuWaits,
+	                                         Common::DebugCounters::Counter::GpuWaitNs);
 	const auto result = m_graphics.device.waitSemaphores(&wait_info, UINT64_MAX);
 	if (result != vk::Result::eSuccess) {
 		HangWatchdog::Scope error("master-wait-error",

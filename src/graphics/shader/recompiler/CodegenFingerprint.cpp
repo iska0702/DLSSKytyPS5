@@ -20,11 +20,12 @@ constexpr const char* kSwitches[] = {KYTY_CODEGEN_SWITCH_LIST nullptr};
 constexpr size_t      kSwitchCount = std::size(kSwitches) - 1;
 
 #if defined(_MSC_VER) && defined(_WIN64) && defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL == 0
-// Members: 28 bools, MadMode, PsLiveExec, loop_guard_budget, loop_guard_shaders, dispatcher_cap,
-// rt_node_budget.
+// Members: 38 bools, MadMode, PsLiveExec, Wave32Clusters, LdsWaitcntBarrier, LdsDeviceBuffer,
+// loop_guard_budget, loop_guard_shaders, dispatcher_cap, rt_node_budget, rt_function,
+// lds_limit_override.
 // Add a new member to the fingerprint below, then update this size (a new bool can fill padding
 // and leave it).
-static_assert(sizeof(CodegenOptions) == 80, "CodegenOptions changed: update CodegenFingerprint");
+static_assert(sizeof(CodegenOptions) == 112,"CodegenOptions changed: update CodegenFingerprint");
 #endif
 
 class Bytes {
@@ -69,6 +70,7 @@ std::vector<uint8_t> CodegenFingerprint() {
 	b.U8(options.single_f2i_saturation ? 1u : 0u);
 	b.U8(options.lod_stats_gate ? 1u : 0u);
 	b.U8(options.robust_buffer_loads ? 1u : 0u);
+	b.U8(options.readonly_buffers ? 1u : 0u);
 	b.U32(static_cast<uint32_t>(options.mad_mode));
 	b.U8(options.interp_modes ? 1u : 0u);
 	b.U8(options.sample_offsets ? 1u : 0u);
@@ -96,13 +98,53 @@ std::vector<uint8_t> CodegenFingerprint() {
 	b.U8(options.fold_lane_masks ? 1u : 0u);
 	b.U8(options.rt_stub ? 1u : 0u);
 	b.U8(options.rt_software ? 1u : 0u);
+	b.U32(options.rt_function);
 	b.U8(options.rt_type6 ? 1u : 0u);
 	b.U8(options.bda_writes ? 1u : 0u);
+	b.U8(options.bda_store_log ? 1u : 0u);
 	b.U32(options.rt_node_budget);
 	b.U8(options.rt_node_stats ? 1u : 0u);
 	b.U8(options.rr_guide_capture ? 1u : 0u);
 	// Native descriptor stride changed when the dedicated ray-guide binding was added.
 	b.U32(static_cast<uint32_t>(IR::DescriptorBindingKind::Count));
+	b.U8(options.ps_helper_atomics_skip ? 1u : 0u);
+	b.U8(options.loop_guard_all ? 1u : 0u);
+	b.U8(options.volatile_loads ? 1u : 0u);
+	b.U8(static_cast<uint8_t>(options.wave32_clusters));
+	b.U8(static_cast<uint8_t>(options.lds_waitcnt_barrier));
+	b.U8(static_cast<uint8_t>(options.lds_device_buffer));
+	b.U32(options.lds_limit_override);
+	b.U8(options.ps_per_vertex ? 1u : 0u);
+	b.U8(options.clip_guard ? 1u : 0u);
+	// Switches added since: only when on, so caches made with them off stay valid.
+	if (options.branchless_loads) {
+		b.Text("branchless_loads");
+	}
+	if (options.branchless_lds) {
+		b.Text("branchless_lds");
+	}
+	if (options.cfg_clone_exits) {
+		b.Text("cfg_clone_exits2"); // 2: MergeIgnoringReturnArms
+	}
+	if (options.wave64_warps) {
+		b.Text("wave64_warps");
+	}
+	if (options.native_float_min_max) {
+		b.Text("native_float_min_max");
+	}
+	if (options.dcache_invalidate) {
+		b.Text("dcache_invalidate");
+	}
+	if (options.readfirstlane_exec_zero) {
+		b.Text("readfirstlane_exec_zero");
+	}
+	if (options.uniform_buffers && GetHostUniformBufferRobust()) {
+		b.Text("uniform_buffers");
+	}
+	if (options.lane_local) {
+		b.Text("lane_local");
+		b.U8(GetHostComputeSubgroups32() ? 1u : 0u);
+	}
 
 	// Host device state the emitter reads (set once by the device layer).
 	const auto float_controls = Spirv::GetHostFloatControls();
@@ -113,9 +155,16 @@ std::vector<uint8_t> CodegenFingerprint() {
 	const auto image_features = Spirv::GetHostImageFeatures();
 	b.U8(image_features.min_lod ? 1u : 0u);
 	b.U8(static_cast<uint8_t>(image_features.compute_derivatives));
+	const auto geometry_guard = Spirv::GetHostGeometryGuard();
+	b.U8(geometry_guard.vertex_outputs ? 1u : 0u);
+	b.U8(geometry_guard.mesh_outputs ? 1u : 0u);
 	const auto shader_clock = Spirv::GetHostShaderClock();
 	b.U8(static_cast<uint8_t>(shader_clock.scope));
 	b.U32(static_cast<uint32_t>(shader_clock.shift));
+	const auto wave_clusters = Spirv::GetHostWaveClusters();
+	b.U8(wave_clusters.vertex ? 1u : 0u);
+	b.U8(wave_clusters.pixel ? 1u : 0u);
+	b.U8(wave_clusters.mesh ? 1u : 0u);
 
 	// Outside the source set: ExtractResourcePlan's flow aliases, and the page constants the
 	// BDA page-table walk bakes into SPIR-V (spirvEmitterMemory.cpp).

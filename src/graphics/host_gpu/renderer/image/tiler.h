@@ -3,6 +3,7 @@
 
 #include "common/common.h"
 #include "graphics/guest_gpu/tile.h"
+#include "graphics/host_gpu/renderer/image/imageInfo.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
 #include <array>
@@ -44,7 +45,6 @@ struct GpuTileInfo {
 class TileManager final {
 public:
 	enum class D16Direction { Promote, Demote };
-	enum class ColorTransform { None, SwapBgra16 };
 
 	struct Result {
 		vk::Buffer buffer = nullptr;
@@ -67,7 +67,8 @@ public:
 
 	// The returned device-local buffer remains alive through the current scheduler tick.
 	[[nodiscard]] Result Detile(vk::Buffer tiled, uint64_t tiled_offset, uint64_t tiled_capacity,
-	                            uint64_t linear_capacity, std::span<const GpuTileInfo> infos);
+	                            uint64_t linear_capacity, std::span<const GpuTileInfo> infos,
+	                            ColorTransform transform = ColorTransform::None);
 	void Tile(vk::Buffer linear, uint64_t linear_offset, uint64_t linear_capacity, vk::Buffer tiled,
 	          uint64_t tiled_offset, uint64_t tiled_capacity, std::span<const GpuTileInfo> infos);
 	void TileImage(Image& image, std::span<const vk::BufferImageCopy> regions, vk::Buffer tiled,
@@ -94,6 +95,24 @@ public:
 	// scratch) and a completion callback compares both results byte for byte (FrameEvent
 	// TilerImageVerifyChecks / TilerImageVerifyMismatches; the first mismatches are logged).
 	[[nodiscard]] static bool ImageDirectVerifyEnabled();
+	// Scratch lifetime: a scratch buffer (GetScratchBuffer, Detile, TransformColor, the internal
+	// passes) returns to the pool or is destroyed once the scheduler tick that last used it has
+	// completed. Without a ScratchHold that is the tick current at allocation, which is enough
+	// only when the caller is done with the buffer before anything can submit that tick.
+	// Inside a ScratchHold the releases wait for the outermost hold to end and are stamped with
+	// the tick current then. A TextureCache operation that keeps using a scratch buffer after
+	// further work that may submit the current tick (a tile pass's StreamBuffer::Map wrap, a
+	// buffer-cache upload's staging wrap, ...) must hold one for its whole duration; otherwise
+	// the buffer could be reused or freed while a later tick still reads or writes it.
+	class ScratchHold final {
+	public:
+		explicit ScratchHold(TileManager& tiler): m_tiler(tiler) { m_tiler.BeginScratchHold(); }
+		~ScratchHold() { m_tiler.EndScratchHold(); }
+		KYTY_CLASS_NO_COPY(ScratchHold);
+
+	private:
+		TileManager& m_tiler;
+	};
 	[[nodiscard]] Result GetScratchBuffer(uint64_t size);
 	// KYTY_VRAM_STATS: idle pooled scratch bytes and their limit.
 	[[nodiscard]] std::pair<uint64_t, uint64_t> ScratchPoolBytes();
@@ -102,8 +121,8 @@ public:
 	void                 TrimScratchPool();
 	void                 ConvertD16(Result source, Result target, D16Direction direction, bool d32,
 	                                const D16Layout& layout);
-	[[nodiscard]] Result SwapBgra16(Result input);
-	void                 SwapBgra16(Result input, Result output);
+	[[nodiscard]] Result TransformColor(Result input, ColorTransform transform, bool to_host);
+	void TransformColor(Result input, Result output, ColorTransform transform, bool to_host);
 
 private:
 	friend struct TileManagerTestAccess;
@@ -127,6 +146,10 @@ private:
 		uint32_t tail_x;
 		uint32_t tail_y;
 		uint32_t tail;
+		// ColorTransform: applied by the buffer tiling passes and TransformColor (whose push
+		// constants end at to_host, gpu_tiler_color_transform.comp).
+		uint32_t color_transform;
+		uint32_t to_host;
 		// Image variants only: the element's image texel is (image_x + x, image_y + y) of layer
 		// image_layer + z.
 		uint32_t image_x;
@@ -158,8 +181,13 @@ private:
 	                                             uint64_t active, uint32_t remaining,
 	                                             uint64_t alignment, uint64_t max_range,
 	                                             uint32_t max_groups) noexcept;
+	// Hands `scratch` to the scheduler (or, inside a ScratchHold, to the hold) for release once
+	// its last tick completed; DeferRelease stamps the current tick.
 	void                          DeferDestroy(Scratch scratch);
+	void                          DeferRelease(Scratch scratch);
 	void                          ReleaseScratch(Scratch scratch);
+	void                          BeginScratchHold();
+	void                          EndScratchHold();
 	// image_regions (image variants): element (x, y) of infos[i] is view texel
 	// (imageOffset / image_texel + (x, y)) of image_regions[i]; with image_layer_views each region
 	// has its own single-layer view (layer 0 of the view), otherwise the view holds every layer.
@@ -167,7 +195,7 @@ private:
 	             std::span<const GpuTileInfo> infos, uint64_t source_base, uint64_t target_base,
 	             std::vector<Dispatch>& dispatches,
 	             std::span<const vk::BufferImageCopy> image_regions = {}, uint32_t image_texel = 1,
-	             bool image_layer_views = false);
+	             bool image_layer_views = false, ColorTransform transform = ColorTransform::None);
 	void Record(vk::Buffer source, uint64_t source_offset, uint64_t source_capacity,
 	            vk::Buffer target, uint64_t target_offset, uint64_t target_capacity,
 	            std::span<Dispatch> dispatches, bool clear_target);
@@ -190,7 +218,6 @@ private:
 	void VerifyOnCompletion(const char* operation, uint64_t guest_address, vk::Buffer expected,
 	                        uint64_t expected_offset, vk::Buffer actual, uint64_t actual_offset,
 	                        uint64_t size, std::vector<std::pair<uint64_t, uint64_t>> ranges);
-	void                       SwapBgra16(Result input, Result output, uint32_t pixels);
 
 	GraphicContext&                         m_graphics;
 	CommandScheduler&                       m_scheduler;
@@ -205,11 +232,11 @@ private:
 	                                        m_image_pipelines {};
 	// Per [load][log2 element bytes]: 0 unknown, 1 usable, 2 unusable.
 	std::array<uint8_t, DirectionCount * BytesPerElementCount> m_image_view_support {};
-	vk::Pipeline                            m_d16_to_d24  = nullptr;
-	vk::Pipeline                            m_d16_to_d32  = nullptr;
-	vk::Pipeline                            m_d24_to_d16  = nullptr;
-	vk::Pipeline                            m_d32_to_d16  = nullptr;
-	vk::Pipeline                            m_swap_bgra16 = nullptr;
+	vk::Pipeline                            m_d16_to_d24      = nullptr;
+	vk::Pipeline                            m_d16_to_d32      = nullptr;
+	vk::Pipeline                            m_d24_to_d16      = nullptr;
+	vk::Pipeline                            m_d32_to_d16      = nullptr;
+	vk::Pipeline                            m_color_transform = nullptr;
 	// Completed scratch buffers kept for reuse (KYTY_TILER_SCRATCH_POOL). Returned by the
 	// deferred completion callback, so a pooled buffer is never in use by the GPU.
 	std::mutex                              m_scratch_mutex;
@@ -219,6 +246,10 @@ private:
 	std::chrono::milliseconds               m_scratch_idle {0};
 	std::chrono::steady_clock::time_point   m_scratch_trim_next {};
 	bool                                    m_clear_detile_scratch = false;
+	// ScratchHold nesting depth and the scratch buffers whose release waits for its end.
+	std::mutex                              m_hold_mutex;
+	uint32_t                                m_hold_depth = 0;
+	std::vector<Scratch>                    m_held;
 };
 
 } // namespace Libs::Graphics

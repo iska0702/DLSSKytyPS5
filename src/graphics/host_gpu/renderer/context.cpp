@@ -1,9 +1,12 @@
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/hangTrace.h"
+#include "common/liveSwitch.h"
+#include "common/onceValue.h"
 #include "common/profiler.h"
 #include "common/rendererBatch.h"
 #include "common/threads.h"
+#include "graphics/host_gpu/gpuBreadcrumbs.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/memoryStats.h"
 #include "graphics/guest_gpu/hardwareContext.h"
@@ -31,6 +34,12 @@
 
 namespace Libs::Graphics {
 
+// KYTY_CP_SINK_ROUTES (default 1, live): CommandBuffer::HelperSink() encodes for the recorder; 0
+// drains it and records natively, as the helpers' former Handle() did.
+static Live::Switch g_sink_routes("KYTY_CP_SINK_ROUTES", Live::ParseDefaultOn);
+// KYTY_DISPATCH_OVERLAP (render.h DispatchOverlapEnabled): live; default on.
+static Live::Switch g_dispatch_overlap("KYTY_DISPATCH_OVERLAP", Live::ParseDefaultOn);
+
 // ------------------------------------------------------------------------------------------------
 // Barrier batcher
 
@@ -43,13 +52,47 @@ static bool EnvSwitch(const char* name, bool default_value) {
 	         std::strcmp(value, "off") == 0);
 }
 
+// KYTY_DEPTH_RO_STORE_NONE=1 (default off; chenxiao07/KytyPS5 ef46df82f): a depth or stencil
+// aspect the rendering's attachment layout makes read-only is stored with STORE_OP_NONE. The draws
+// of such a pass cannot write it, and STORE_OP_STORE is a write for synchronization (a pass that
+// tests against the depth buffer it also samples, then the next transition of it: a
+// write-after-write the barrier made for the shader reads did not cover) and a write-back for the
+// driver.
+static vk::AttachmentStoreOp DepthStoreOp(vk::ImageLayout layout, bool stencil) {
+	static const bool enabled = [] {
+		const auto* value = std::getenv("KYTY_DEPTH_RO_STORE_NONE");
+		return value != nullptr && std::strcmp(value, "1") == 0;
+	}();
+	if (enabled) {
+		switch (layout) {
+			case vk::ImageLayout::eDepthStencilReadOnlyOptimal: return vk::AttachmentStoreOp::eNone;
+			case vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal:
+			case vk::ImageLayout::eDepthReadOnlyOptimal:
+				if (!stencil) return vk::AttachmentStoreOp::eNone;
+				break;
+			case vk::ImageLayout::eDepthAttachmentStencilReadOnlyOptimal:
+			case vk::ImageLayout::eStencilReadOnlyOptimal:
+				if (stencil) return vk::AttachmentStoreOp::eNone;
+				break;
+			default: break;
+		}
+	}
+	return vk::AttachmentStoreOp::eStore;
+}
+
 bool BarrierBatchEnabled() {
-	static const bool enabled = EnvSwitch("KYTY_BARRIER_BATCH", true);
+	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
+	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [&] {
+		return EnvSwitch("KYTY_BARRIER_BATCH", true);
+	}));
 	return enabled;
 }
 
 bool BarrierSinkEnabled() {
-	static const bool enabled = BarrierBatchEnabled() && EnvSwitch("KYTY_BARRIER_SINK", true);
+	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
+	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [&] {
+		return BarrierBatchEnabled() && EnvSwitch("KYTY_BARRIER_SINK", true);
+	}));
 	return enabled;
 }
 
@@ -59,13 +102,26 @@ bool UploadBatchEnabled() {
 }
 
 bool DrawWriteSinkEnabled() {
-	static const bool enabled = BarrierBatchEnabled() && EnvSwitch("KYTY_DRAW_WRITE_SINK", true);
+	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
+	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [&] {
+		return BarrierBatchEnabled() && EnvSwitch("KYTY_DRAW_WRITE_SINK", true);
+	}));
 	return enabled;
 }
 
 bool DepthFeedbackKeepEnabled() {
-	static const bool enabled =
-	    BarrierBatchEnabled() && EnvSwitch("KYTY_DEPTH_FEEDBACK_KEEP", true);
+	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
+	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [&] {
+		return BarrierBatchEnabled() && EnvSwitch("KYTY_DEPTH_FEEDBACK_KEEP", true);
+	}));
+	return enabled;
+}
+
+bool DepthFeedbackLazyEnabled() {
+	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
+	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [&] {
+		return DepthFeedbackKeepEnabled() && EnvSwitch("KYTY_DEPTH_FEEDBACK_LAZY", true);
+	}));
 	return enabled;
 }
 
@@ -75,7 +131,10 @@ bool DepthLayoutStableEnabled() {
 }
 
 bool PushConstantShadowEnabled() {
-	static const bool enabled = EnvSwitch("KYTY_PUSH_CONSTANT_SHADOW", true);
+	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
+	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [&] {
+		return EnvSwitch("KYTY_PUSH_CONSTANT_SHADOW", true);
+	}));
 	return enabled;
 }
 
@@ -230,6 +289,14 @@ CommandSink CommandBuffer::Sink() const {
 	return CommandSink(*this);
 }
 
+CommandSink CommandBuffer::HelperSink() const {
+	if (Encoding() && !g_sink_routes.On()) {
+		// The former Handle() path: drain, then record natively in the direct window.
+		(void)Handle();
+	}
+	return Sink();
+}
+
 CommandSink CommandBuffer::StateSink() const {
 	EXIT_IF(IsInvalid());
 	return CommandSink(*this);
@@ -269,6 +336,36 @@ void CommandBuffer::ResetBarrierState() const {
 	m_epoch_instance       = 0;
 	m_internal_recording   = 0;
 	m_feedback_keep.reset();
+	m_overlap_open         = false;
+}
+
+bool DispatchOverlapEnabled() {
+	return BarrierBatchEnabled() && g_dispatch_overlap.Get() != 0;
+}
+
+void CommandBuffer::NoteGuestDispatch(bool lds) const {
+	// Called right after the dispatch's ShaderAccess request: nothing may have been recorded or
+	// requested since the dispatch except that request.
+	m_overlap_open = BarrierBatchEnabled() && m_pending.has_memory && m_pending.images.empty() &&
+	                 m_pending.buffers.empty() && m_pending.uploads.empty() &&
+	                 m_pending.origins == OriginBit(BarrierOrigin::ShaderAccess);
+	m_overlap_lds = lds;
+}
+
+bool CommandBuffer::TakeDispatchOverlap(bool lds, bool take) const {
+	const bool open = m_overlap_open;
+	m_overlap_open  = false;
+	if (!open || lds || m_overlap_lds || !m_pending.has_memory || !m_pending.images.empty() ||
+	    !m_pending.buffers.empty() || !m_pending.uploads.empty() ||
+	    m_pending.origins != OriginBit(BarrierOrigin::ShaderAccess)) {
+		return false;
+	}
+	if (take) {
+		// The next dispatch's own ShaderAccess request covers the dropped one: its first scope is
+		// every earlier compute shader access, the dropped dispatch's included.
+		m_pending.Clear();
+	}
+	return true;
 }
 
 void CommandBuffer::NoteFeedbackKeep(const vk::ImageMemoryBarrier2& ordering) const {
@@ -560,6 +657,7 @@ void CommandBuffer::FlushBarriers() const {
 	// barriers were widened by the same scopes above.
 	m_epoch_clean    = m_pending.has_memory && IsFullBarrier(m_pending.memory);
 	m_epoch_instance = 0;
+	m_overlap_open   = false;
 	m_pending.Clear();
 }
 
@@ -594,6 +692,7 @@ bool CommandBuffer::CanSinkDrawWrites() const {
 
 void CommandBuffer::NoteDrawRecorded() const {
 	m_recorded_since_flush = true;
+	m_overlap_open         = false;
 	if (!(m_draw_scope && m_draw_safe && m_rendering && m_epoch_instance == m_rendering_serial)) {
 		m_epoch_clean = false;
 	}
@@ -634,6 +733,13 @@ void CommandBuffer::End() const {
 	EndRendering();
 	FlushBarriers();
 	auto buffer = StateHandle();
+	if (GpuBreadcrumbs::Active()) {
+		// The command buffer's last breadcrumb: at the bottom of the pipe, everything in it completed.
+		const auto tick = m_context.GetCommandScheduler().CurrentTick();
+		GpuBreadcrumbs::Write(buffer, GpuBreadcrumbs::Queue::Graphics,
+		                      GpuBreadcrumbs::Note(GpuBreadcrumbs::Queue::Graphics,
+		                                           {.op = GpuBreadcrumbs::OpCommandBufferEnd, .tick = tick}));
+	}
 
 	auto result = buffer.end();
 
@@ -801,22 +907,55 @@ void CommandBuffer::SetDebugInfo(uint32_t op, uint64_t submit_id, uint32_t arg0,
 	m_debug_arg2      = arg2;
 	m_debug_arg3      = arg3;
 	m_debug_arg4      = arg4;
-	if (m_graphics.diagnostic_checkpoints_enabled && m_buffer) {
-		const auto* marker = RecordDiagnosticCheckpoint({.op        = op,
-		                                                 .submit_id = submit_id,
-		                                                 .arg0      = arg0,
-		                                                 .arg1      = arg1,
-		                                                 .arg2      = arg2,
-		                                                 .arg3      = arg3,
-		                                                 .arg4      = arg4,
-		                                                 .tick = m_context.GetCommandScheduler().CurrentTick(),
-		                                                 .vs = m_shaders != nullptr ? m_shaders->GetVs().es_regs.data_addr : 0,
-		                                                 .ps = m_shaders != nullptr ? m_shaders->GetPs().ps_regs.data_addr : 0,
-		                                                 .cs = m_shaders != nullptr ? m_shaders->GetCs().cs_regs.data_addr : 0});
-		if (marker != nullptr) {
-			Handle().setCheckpointNV(marker);
+	const bool breadcrumbs = GpuBreadcrumbs::Active();
+	if ((m_graphics.diagnostic_checkpoints_enabled || breadcrumbs) && m_buffer) {
+		const DiagnosticCheckpoint checkpoint {
+		    .op        = op,
+		    .submit_id = submit_id,
+		    .arg0      = arg0,
+		    .arg1      = arg1,
+		    .arg2      = arg2,
+		    .arg3      = arg3,
+		    .arg4      = arg4,
+		    .tick      = m_context.GetCommandScheduler().CurrentTick(),
+		    .vs        = m_shaders != nullptr ? m_shaders->GetVs().es_regs.data_addr : 0,
+		    .ps        = m_shaders != nullptr ? m_shaders->GetPs().ps_regs.data_addr : 0,
+		    .cs        = m_shaders != nullptr ? m_shaders->GetCs().cs_regs.data_addr : 0};
+		if (m_graphics.diagnostic_checkpoints_enabled) {
+			const auto* marker = RecordDiagnosticCheckpoint(checkpoint);
+			if (marker != nullptr) {
+				Handle().setCheckpointNV(marker);
+			}
+		}
+		if (breadcrumbs) {
+			// KYTY_GPU_BREADCRUMBS: a state-like command (it orders nothing the batcher tracks), so it
+			// neither flushes pending barriers nor ends the rendering instance.
+			const auto marker = GpuBreadcrumbs::Note(GpuBreadcrumbs::Queue::Graphics, checkpoint);
+			const auto sink   = StateSink();
+			sink.writeBufferMarkerAMD(vk::PipelineStageFlagBits::eTopOfPipe, GpuBreadcrumbs::Buffer(),
+			                          GpuBreadcrumbs::TopOffset(GpuBreadcrumbs::Queue::Graphics), marker);
+			sink.writeBufferMarkerAMD(vk::PipelineStageFlagBits::eBottomOfPipe, GpuBreadcrumbs::Buffer(),
+			                          GpuBreadcrumbs::BottomOffset(GpuBreadcrumbs::Queue::Graphics), marker);
 		}
 	}
+}
+
+// The same rendering: the size, the layers, the depth/stencil attachment and the color attachments
+// up to the count (those past it are no part of a rendering; the defaulted comparison read all eight
+// at every draw; chenxiao07/KytyPS5 7bce89917).
+static bool SameRendering(const RenderState& a, const RenderState& b) {
+	if (a.num_color_attachments != b.num_color_attachments || a.width != b.width ||
+	    a.height != b.height || a.num_layers != b.num_layers ||
+	    !(a.depth_stencil_attachment == b.depth_stencil_attachment)) {
+		return false;
+	}
+	const auto count = std::min<uint32_t>(a.num_color_attachments, RENDER_COLOR_ATTACHMENTS_MAX);
+	for (uint32_t i = 0; i < count; i++) {
+		if (!(a.color_attachments[i] == b.color_attachments[i])) {
+			return false;
+		}
+	}
+	return true;
 }
 
 void CommandBuffer::BeginRendering(const RenderState& state) const {
@@ -827,7 +966,7 @@ void CommandBuffer::BeginRendering(const RenderState& state) const {
 	const bool same_control =
 	    m_occlusion_control == count_control ||
 	    (OcclusionCounter::GateEnabled() && !occlusion.Active() && !occlusion.WouldCount(count_control));
-	const bool same_instance = m_rendering && m_render_state == state && same_control;
+	const bool same_instance = m_rendering && SameRendering(m_render_state, state) && same_control;
 	if (same_instance) {
 		m_occlusion_control = count_control;
 	}
@@ -867,7 +1006,7 @@ void CommandBuffer::BeginRendering(const RenderState& state) const {
 		if (barrier_split) {
 			KYTY_GPU_OP_SITE("render.barrier_split");
 			EndRendering();
-		} else if (m_render_state == state) {
+		} else if (SameRendering(m_render_state, state)) {
 			KYTY_GPU_OP_SITE("render.occlusion_control");
 			EndRendering();
 		} else {
@@ -907,7 +1046,8 @@ void CommandBuffer::BeginRendering(const RenderState& state) const {
 	depth.imageLayout = depth_stencil.image_layout;
 	depth.loadOp =
 	    depth_stencil.depth_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
-	depth.storeOp                       = vk::AttachmentStoreOp::eStore;
+	depth.storeOp = depth_stencil.depth_clear ? vk::AttachmentStoreOp::eStore
+	                                          : DepthStoreOp(depth_stencil.image_layout, false);
 	depth.clearValue.depthStencil.depth = std::bit_cast<float>(depth_stencil.clear_value[0]);
 
 	vk::RenderingAttachmentInfo stencil {};
@@ -915,7 +1055,8 @@ void CommandBuffer::BeginRendering(const RenderState& state) const {
 	stencil.imageLayout = depth_stencil.image_layout;
 	stencil.loadOp =
 	    depth_stencil.stencil_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
-	stencil.storeOp                         = vk::AttachmentStoreOp::eStore;
+	stencil.storeOp = depth_stencil.stencil_clear ? vk::AttachmentStoreOp::eStore
+	                                              : DepthStoreOp(depth_stencil.image_layout, true);
 	stencil.clearValue.depthStencil.stencil = depth_stencil.clear_value[1];
 
 	vk::RenderingInfo rendering {};
@@ -928,15 +1069,27 @@ void CommandBuffer::BeginRendering(const RenderState& state) const {
 	StateSink().beginRendering(rendering);
 	m_context.GetOcclusionCounter().Begin();
 	--m_internal_recording;
-	if (m_context.GetOcclusionCounter().Active() &&
-	    (HangTrace::Enabled() || OcclusionCounter::SyncProxyDumps())) {
-		const auto& db = GetRegisters().GetDepthRenderTarget();
-		m_context.GetOcclusionCounter().NoteScope(db.z_read_base_addr, state.width, state.height,
-		                                          state.num_color_attachments,
-		                                          depth_stencil.has_depth,
-		                                          static_cast<uint32_t>(db.z_info.format));
+	if (HangTrace::Enabled() || OcclusionCounter::SyncProxyDumps()) {
+		const auto& db        = GetRegisters().GetDepthRenderTarget();
+		auto&       occlusion = m_context.GetOcclusionCounter();
+		// A query a split dump begins inside this instance reports the same scope
+		// (KYTY_OCCLUSION_SPLIT).
+		occlusion.NoteInstance(db.z_read_base_addr, state.width, state.height,
+		                       state.num_color_attachments, depth_stencil.has_depth,
+		                       static_cast<uint32_t>(db.z_info.format));
+		if (occlusion.Active()) {
+			occlusion.NoteScope(db.z_read_base_addr, state.width, state.height,
+			                    state.num_color_attachments, depth_stencil.has_depth,
+			                    static_cast<uint32_t>(db.z_info.format));
+		}
 	}
+	// The open pass holds the cleared contents, so a later clear begins a new pass.
 	m_render_state = state;
+	for (auto& color: m_render_state.color_attachments) {
+		color.is_clear = false;
+	}
+	m_render_state.depth_stencil_attachment.depth_clear   = false;
+	m_render_state.depth_stencil_attachment.stencil_clear = false;
 	m_rendering    = true;
 	++m_rendering_serial;
 	m_occlusion_control = count_control;

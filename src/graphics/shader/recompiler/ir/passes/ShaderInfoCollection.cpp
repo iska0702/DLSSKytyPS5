@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/ir/passes/ShaderInfoCollection.h"
 
 #include "common/assert.h"
+#include "graphics/shader/recompiler/CodegenOptions.h"
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
 
 #include <algorithm>
@@ -98,6 +99,15 @@ void ValidateValueReferences(const Program& program, ShaderStageInputInfo input_
 					}
 					break;
 				}
+				case ValueOpcode::GetAttributeF16: {
+					if (program.stage != ShaderType::Pixel || !inst.Arg(0).IsImmediate() ||
+					    inst.Arg(0).GetType() != Type::U32 || !inst.Arg(1).IsImmediate() ||
+					    inst.Arg(1).GetType() != Type::U32 || !inst.Arg(2).IsImmediate() ||
+					    inst.Arg(1).U32() >= 4u || inst.Arg(0).U32() >= input_info.pixel->input_num) {
+						return Fail("f16 attribute reference is invalid");
+					}
+					break;
+				}
 				case ValueOpcode::GetInterpolationParameter: {
 					if (program.stage != ShaderType::Pixel || !inst.Arg(0).IsImmediate() ||
 					    inst.Arg(0).GetType() != Type::U32 || !inst.Arg(1).IsImmediate() ||
@@ -131,6 +141,7 @@ void ValidateValueReferences(const Program& program, ShaderStageInputInfo input_
 						case StageInputKind::InvocationId:
 						case StageInputKind::PrimitiveId:
 						case StageInputKind::InstanceIndex:
+						case StageInputKind::BaseInstance:
 						case StageInputKind::FrontFacing:
 						case StageInputKind::LocalInvocationIndex:
 							if (component != 0u) {
@@ -215,38 +226,55 @@ void CollectPixelInputs(const Program& program, const ShaderPixelInputInfo* pixe
 	if (pixel->ps_front_face) {
 		AddInput(info, StageInputKind::FrontFacing, 0, 1, "gl_FrontFacing");
 	}
+	std::array<bool, 32> used {};
 	std::array<bool, 32> per_vertex {};
 	std::array<bool, 32> interpolated {};
 	for (const auto* block: program.blocks) {
 		for (const auto& inst: *block) {
 			if (inst.GetOpcode() == ValueOpcode::GetAttribute) {
+				used[inst.Arg(0).U32()] = true;
 				interpolated[inst.Arg(0).U32()] = true;
+			} else if (inst.GetOpcode() == ValueOpcode::GetAttributeF16) {
+				// Packed halves cannot be interpolated by the host: smooth inputs read raw vertices.
+				const auto input = inst.Arg(0).U32();
+				used[input]       = true;
+				per_vertex[input] = per_vertex[input] || !ShaderPixelParameterIsFlat(*pixel, input);
 			} else if (inst.GetOpcode() == ValueOpcode::GetInterpolationParameter) {
 				const auto input = inst.Arg(0).U32();
 				const auto mode  = inst.Arg(2).U32();
+				used[input] = true;
+				// KYTY_PS_PER_VERTEX=0: no raw-vertex inputs (the reads take the interpolated value).
 				per_vertex[input] =
-				    per_vertex[input] || mode < 2u || !ShaderPixelParameterIsFlat(*pixel, input);
+				    GetCodegenOptions().ps_per_vertex &&
+				    (per_vertex[input] || mode < 2u || !ShaderPixelParameterIsFlat(*pixel, input));
 			}
 		}
 	}
-	// Aliases of a vertex output share one SPIR-V interface variable. If any
-	// alias reads raw vertices, interpolate the other aliases from those too.
+	// Mixed interpolation modes share raw vertices at their guest export slot.
+	// Rectangle expansion alone supplies separate flat and smooth outputs, and so does
+	// KYTY_PS_PER_VERTEX=0 (no raw-vertex inputs; ShaderPixelParameterLocation).
+	const bool shared_slots = pixel->parameter_mode != ShaderPixelParameterMode::Rectangle &&
+	                          GetCodegenOptions().ps_per_vertex;
 	for (uint32_t input = 0; input < pixel->input_num; input++) {
 		for (uint32_t alias = 0; alias < pixel->input_num; alias++) {
+			const bool same_mode = ShaderPixelParameterIsFlat(*pixel, input) ==
+			                       ShaderPixelParameterIsFlat(*pixel, alias);
 			if (ShaderPixelParameterMappedLocation(*pixel, input) ==
 			        ShaderPixelParameterMappedLocation(*pixel, alias) &&
-			    ShaderPixelParameterIsFlat(*pixel, input) ==
-			        ShaderPixelParameterIsFlat(*pixel, alias)) {
-				per_vertex[input] = per_vertex[input] || per_vertex[alias];
+			    (shared_slots || same_mode)) {
+				per_vertex[input] = per_vertex[input] || per_vertex[alias] || !same_mode;
 			}
 		}
 	}
 	for (uint32_t input = 0; input < pixel->input_num; input++) {
+		// Unread parameters must not require exports from the preceding stage.
+		if (!used[input]) continue;
 		AddInput(info, StageInputKind::Parameter, input, 4, fmt::format("in_param_{}", input),
 		         per_vertex[input]);
 	}
 	for (uint32_t input = 0; input < pixel->input_num; input++) {
-		if (interpolated[input] && per_vertex[input]) {
+		if (interpolated[input] && per_vertex[input] &&
+		    !ShaderPixelParameterIsFlat(*pixel, input)) {
 			const auto kind = pixel->ps_no_perspective ? StageInputKind::BaryCoordNoPerspective
 			                                           : StageInputKind::BaryCoordSmooth;
 			AddInput(info, kind, 0, 3,
@@ -288,6 +316,9 @@ void CollectBuiltinInputs(const Program& program, ShaderInfo& info) {
 					break;
 				case StageInputKind::InstanceIndex:
 					AddInput(info, kind, 0, 1, "gl_InstanceIndex");
+					break;
+				case StageInputKind::BaseInstance:
+					AddInput(info, kind, 0, 1, "gl_BaseInstance");
 					break;
 				case StageInputKind::InvocationId:
 					AddInput(info, kind, 0, 1, "gl_InvocationID");
@@ -341,7 +372,7 @@ void CollectBuiltinInputs(const Program& program, ShaderInfo& info) {
 
 void CollectOutputs(const Program& program, ShaderStageInputInfo input_info, ShaderInfo& info) {
 	const bool alpha_remap = program.stage == ShaderType::Pixel && input_info.pixel != nullptr &&
-	                         input_info.pixel->alpha_blend_source_remap;
+	                         input_info.pixel->alpha_blend_source != ShaderAlphaBlendSource::None;
 	for (const auto* block: program.blocks) {
 		for (const auto& inst: *block) {
 			if (inst.GetOpcode() != ValueOpcode::SetAttribute) {
@@ -400,16 +431,23 @@ void CollectOutputs(const Program& program, ShaderStageInputInfo input_info, Sha
 					AddOutput(info, StageOutputKind::Parameter, export_info.index,
 					          export_info.index, fmt::format("out_param_{}", export_info.index));
 					break;
-				case ExportTargetKind::Mrt:
+				case ExportTargetKind::Mrt: {
 					if (alpha_remap && export_info.index != 0) {
 						break;
 					}
-					AddOutput(info, StageOutputKind::Mrt, export_info.index, export_info.index,
+					const auto slot = input_info.pixel->dual_source_blending
+					                      ? 0u : ShaderPixelExportTarget(input_info.pixel->target_shader_mask,
+					                                                    export_info.index);
+					if (slot >= 8) {
+						break;
+					}
+					AddOutput(info, StageOutputKind::Mrt, export_info.index, slot,
 					          fmt::format("out_mrt_{}", export_info.index));
 					if (alpha_remap) {
-						AddOutput(info, StageOutputKind::Mrt, 1, 1, "out_mrt_1");
+						AddOutput(info, StageOutputKind::Mrt, 1, 0, "out_mrt_1");
 					}
 					break;
+				}
 				default: break;
 			}
 		}

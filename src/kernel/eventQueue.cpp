@@ -5,6 +5,7 @@
 #include "common/hangWatchdog.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
+#include "common/paceLog.h"
 #include "common/stringUtils.h"
 #include "common/threads.h"
 #include "common/timer.h"
@@ -303,6 +304,9 @@ int KernelEqueuePrivate::GetTriggeredEventsLegacy(KernelEvent* ev, int num) {
 				event.event = event.pending_events.front();
 				event.pending_events.pop_front();
 				event.triggered = true;
+			} else {
+				// A persistent level is delivered again by the next wait, not this batch.
+				break;
 			}
 
 			if (ret >= num) {
@@ -634,6 +638,7 @@ int KYTY_SYSV_ABI KernelWaitEqueue(KernelEqueue eq, KernelEvent* ev, int num, in
 	     (timo == nullptr ? "inf" : fmt::format("{}", *timo).c_str()),
 	     Common::Thread::GetThreadIdUnique());
 
+	const uint64_t pace_begin = PaceLog::Enabled() ? PaceLog::NowNs() : 0;
 	if (timo == nullptr) {
 		*out = owner->WaitForEvents(ev, num, 0);
 	}
@@ -644,6 +649,12 @@ int KYTY_SYSV_ABI KernelWaitEqueue(KernelEqueue eq, KernelEvent* ev, int num, in
 		} else {
 			*out = owner->WaitForEvents(ev, num, *timo);
 		}
+	}
+	if (pace_begin != 0) {
+		const bool got = *out > 0;
+		PaceLog::NoteWait(pace_begin, PaceLog::NowNs(), Common::Thread::GetThreadIdUnique(),
+		                  got ? ev[0].filter : 0, got ? static_cast<uint64_t>(ev[0].ident) : 0,
+		                  *out, owner->GetName().c_str());
 	}
 
 	if (*out == KERNEL_ERROR_EBADF) {

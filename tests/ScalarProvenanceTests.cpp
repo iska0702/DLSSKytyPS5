@@ -15,6 +15,7 @@
 namespace {
 
 using namespace Libs::Graphics::ShaderRecompiler::IR;
+using Libs::Graphics::ShaderComputeInputInfo;
 using Libs::Graphics::ShaderType;
 
 void Check(bool condition, const char *message) {
@@ -38,6 +39,7 @@ void CheckFatal(F &&function, std::string_view expected, const char *message) {
 
 struct Fixture {
   Program program;
+  ShaderComputeInputInfo compute{};
 
   explicit Fixture(uint32_t block_count = 1) {
     program.stage = ShaderType::Compute;
@@ -231,12 +233,9 @@ void TestShaderBaseAndUserData() {
 
 void TestCarryAndBitFields() {
   Fixture fixture;
-  const auto carry =
-      fixture.Emit(ValueOpcode::IAddCarry32, {Value(0xffffffffu), Value(2u)});
-  const auto low =
-      fixture.Emit(ValueOpcode::CompositeExtractU32x2, {carry, Value(0u)});
-  const auto high =
-      fixture.Emit(ValueOpcode::CompositeExtractU32x2, {carry, Value(1u)});
+  const auto low = fixture.Emit(ValueOpcode::IAdd32, {Value(0xffffffffu), Value(2u)});
+  const auto carry = fixture.Emit(ValueOpcode::ULessThan32, {low, Value(0xffffffffu)});
+  const auto high = fixture.Emit(ValueOpcode::SelectU32, {carry, Value(1u), Value(0u)});
   const auto inserted =
       fixture.Emit(ValueOpcode::BitFieldInsert,
                    {Value(0u), Value(0x89abcdefu), Value(0u), Value(32u)});
@@ -485,37 +484,58 @@ void TestSharedIntegerRuntimeDependencies() {
 }
 
 void TestConstantBufferBounds() {
-  Fixture fixture;
-  const auto memory = fixture.AddMemory(ResourceKind::ScalarBuffer);
-  const auto buffer =
-      fixture.Emit(ValueOpcode::GetBufferResource,
-                   {Value(0x3000u), Value(0u), Value(16u), Value(0u)});
-  const auto read = fixture.EmitMemory(ValueOpcode::ReadConstBuffer,
-                                       {buffer, Value(12u)}, memory);
-  fixture.Emit(ValueOpcode::GetBufferResource,
-               {read, Value(0u), Value(16u), Value(0u)});
-  fixture.Plan();
+  struct Case {
+    uint32_t offset;
+    uint32_t immediate;
+    uint32_t stride;
+    uint32_t records;
+    bool valid;
+    uint32_t expected;
+    uint32_t reads;
+  };
+  struct MemoryProbe {
+    TestMemory memory{{{0x3000u, 0x12345678u}, {0x300cu, 0xa5a5a5a5u}}};
+    uint32_t attempts = 0;
+  };
+  const auto read_memory = [](void *userdata, uint64_t address,
+                              std::span<uint32_t> values) {
+    auto &probe = *static_cast<MemoryProbe *>(userdata);
+    ++probe.attempts;
+    return ReadMemory(&probe.memory, address, values);
+  };
+  // PS5 scalar-buffer loads return zero per out-of-range DWORD without touching
+  // memory; an unreadable in-range address remains a failed walk. The byte offset
+  // is the immediate plus the dynamic offset, rounded down to a DWORD.
+  for (const auto &test : {Case{12u, 0u, 0u, 16u, true, 0xa5a5a5a5u, 1u},
+                           Case{2u, 1u, 0u, 16u, true, 0x12345678u, 1u},
+                           Case{0xfffffffcu, 4u, 0u, 16u, true, 0u, 0u},
+                           Case{16u, 0u, 0u, 16u, true, 0u, 0u},
+                           Case{12u, 0u, 0u, 14u, true, 0u, 0u},
+                           Case{0u, 0u, 0u, 0u, true, 0u, 0u},
+                           Case{8u, 0u, 0u, 16u, false, 0u, 1u},
+                           Case{12u, 0u, 48u, 32768u, true, 0xa5a5a5a5u, 1u},
+                           Case{0x6339c0u, 16u, 48u, 32768u, true, 0u, 0u}}) {
+    Fixture fixture;
+    const auto memory =
+        fixture.AddMemory(ResourceKind::ScalarBuffer, static_cast<int32_t>(test.immediate));
+    const auto buffer =
+        fixture.Emit(ValueOpcode::GetBufferResource,
+                     {Value(0x3000u), Value(test.stride << 16u), Value(test.records), Value(0u)});
+    const auto read = fixture.EmitMemory(ValueOpcode::ReadConstBuffer,
+                                         {buffer, Value(test.offset)}, memory);
+    fixture.Emit(ValueOpcode::GetBufferResource,
+                 {read, Value(0u), Value(16u), Value(0u)});
+    fixture.Plan();
 
-  TestMemory memory_image{{{0x300cu, 0xa5a5a5a5u}}};
-  SrtRuntime runtime{.read_memory = ReadMemory, .userdata = &memory_image};
-  std::vector<uint32_t> flat;
-  Check(SrtWalker(fixture.program, runtime).RefreshFlatBuffer(flat) &&
-            flat == std::vector<uint32_t>{0xa5a5a5a5u},
-        "constant-buffer SRT walk failed");
-
-  Fixture overflow;
-  const auto overflow_memory = overflow.AddMemory(ResourceKind::ScalarBuffer);
-  const auto overflow_buffer =
-      overflow.Emit(ValueOpcode::GetBufferResource,
-                    {Value(0x3000u), Value(0u), Value(16u), Value(0u)});
-  const auto overflow_read =
-      overflow.EmitMemory(ValueOpcode::ReadConstBuffer,
-                          {overflow_buffer, Value(16u)}, overflow_memory);
-  overflow.Emit(ValueOpcode::GetBufferResource,
-                {overflow_read, Value(0u), Value(16u), Value(0u)});
-  overflow.Plan();
-  Check(!SrtWalker(overflow.program, runtime).RefreshFlatBuffer(flat),
-        "out-of-bounds constant-buffer walk was accepted");
+    MemoryProbe memory_image;
+    SrtRuntime runtime{.read_memory = read_memory, .userdata = &memory_image};
+    std::vector<uint32_t> flat;
+    Check(SrtWalker(fixture.program, runtime).RefreshFlatBuffer(flat) == test.valid,
+          "constant-buffer walk misaligned or wrapped its offset components");
+    Check((!test.valid || flat == std::vector<uint32_t>{test.expected}) &&
+              memory_image.attempts == test.reads,
+          "constant-buffer walk read the wrong word or accessed an out-of-bounds address");
+  }
 }
 
 void TestReadLaneElimination() {
@@ -700,6 +720,102 @@ void TestKnownZeroBitsFoldIndexedReads() {
   }
 }
 
+void TestKnownZeroBitsThroughLoopPhis() {
+  // bruno 1d9b1ff09. Loop header phis: an index the loop never changes (a waterfall loop's), a
+  // counter stepping by 4, and one stepping by 1. The first two keep their two low zero bits.
+  namespace Recompiler = Libs::Graphics::ShaderRecompiler;
+  const auto saved = Recompiler::GetCodegenOptions();
+  struct Restore {
+    Recompiler::CodegenOptions options;
+    ~Restore() { Recompiler::SetCodegenOptions(options); }
+  } restore{saved};
+  auto options = saved;
+  options.movrel_range = true;
+  options.movrel_known_zeros = true;
+  Recompiler::SetCodegenOptions(options);
+
+  Fixture fixture(2);
+  auto &entry = fixture.BlockAt(0);
+  auto &loop = fixture.BlockAt(1);
+  entry.AddBranch(&loop);
+  loop.AddBranch(&loop);
+  const auto user = fixture.Emit(ValueOpcode::GetUserData, {Value(static_cast<ScalarReg>(2))});
+  const auto shifted = fixture.Emit(ValueOpcode::ShiftLeftLogical32, {user, Value(2u)});
+  auto &invariant = loop.AppendNewInst(ValueOpcode::Phi, {}, uint64_t(Type::U32));
+  auto &counter = loop.AppendNewInst(ValueOpcode::Phi, {}, uint64_t(Type::U32));
+  auto &odd = loop.AppendNewInst(ValueOpcode::Phi, {}, uint64_t(Type::U32));
+  auto &loop_exec = loop.AppendNewInst(ValueOpcode::Phi, {}, uint64_t(Type::U1));
+  const auto next = fixture.Emit(ValueOpcode::IAdd32, {Value(&counter), Value(4u)}, 0, 1);
+  const auto next_odd = fixture.Emit(ValueOpcode::IAdd32, {Value(&odd), Value(1u)}, 0, 1);
+  invariant.AddPhiOperand(&entry, shifted);
+  invariant.AddPhiOperand(&loop, Value(&invariant));
+  counter.AddPhiOperand(&entry, Value(0u));
+  counter.AddPhiOperand(&loop, next);
+  odd.AddPhiOperand(&entry, shifted);
+  odd.AddPhiOperand(&loop, next_odd);
+  const auto compare = [&](Value index, uint32_t constant) {
+    return fixture.Emit(
+        ValueOpcode::ReferenceU32,
+        {fixture.Emit(ValueOpcode::SelectU32,
+                      {fixture.Emit(ValueOpcode::IEqual32, {index, Value(constant)}, 0, 1),
+                       Value(1u), Value(2u)},
+                      0, 1)},
+        0, 1);
+  };
+  const auto lane = fixture.Emit(
+      ValueOpcode::BitwiseAnd32,
+      {fixture.Emit(ValueOpcode::ReadFirstLane, {Value(&invariant), Value(true)}, 0, 1),
+       Value(0xffu)},
+      0, 1);
+  const auto lane_eight = compare(lane, 8u);
+  const auto lane_five = compare(lane, 5u);
+  const auto counter_eight = compare(Value(&counter), 8u);
+  const auto counter_six = compare(Value(&counter), 6u);
+  const auto odd_five = compare(Value(&odd), 5u);
+  // A waterfall loop: the index register was written under the EXEC before the loop, and the
+  // loop's EXEC only loses lanes; the lane it reads holds the written value.
+  const auto entry_exec = fixture.Emit(ValueOpcode::IEqual32, {user, Value(3u)});
+  const auto other = fixture.Emit(ValueOpcode::GetUserData, {Value(static_cast<ScalarReg>(3))});
+  const auto masked = fixture.Emit(
+      ValueOpcode::SelectU32,
+      {entry_exec, fixture.Emit(ValueOpcode::BitwiseAnd32, {other, Value(0xfffffffcu)}), user});
+  const auto done = fixture.Emit(
+      ValueOpcode::LogicalNot, {fixture.Emit(ValueOpcode::IEqual32, {other, Value(9u)}, 0, 1)},
+      0, 1);
+  loop_exec.AddPhiOperand(&entry, entry_exec);
+  loop_exec.AddPhiOperand(
+      &loop, fixture.Emit(ValueOpcode::LogicalAnd, {Value(&loop_exec), done}, 0, 1));
+  const auto waterfall = fixture.Emit(
+      ValueOpcode::BitwiseAnd32,
+      {fixture.Emit(ValueOpcode::ReadFirstLane, {masked, Value(&loop_exec)}, 0, 1), Value(0xffu)},
+      0, 1);
+  const auto waterfall_eight = compare(waterfall, 8u);
+  const auto waterfall_five = compare(waterfall, 5u);
+  // Without the mask, the inactive lanes' value (any) could be read.
+  const auto unmasked = fixture.Emit(
+      ValueOpcode::BitwiseAnd32,
+      {fixture.Emit(ValueOpcode::ReadFirstLane,
+                    {masked, fixture.Emit(ValueOpcode::IEqual32, {other, Value(7u)}, 0, 1)}, 0,
+                    1),
+       Value(0xffu)},
+      0, 1);
+  const auto unmasked_five = compare(unmasked, 5u);
+
+  ConstantPropagationPass(fixture.program.blocks);
+
+  const auto folded = [](Value reference) {
+    return reference.ResolveInstruction()->Arg(0).Resolve() == Value(2u);
+  };
+  Check(!folded(lane_eight) && folded(lane_five),
+        "known bits did not pass through a loop-invariant phi");
+  Check(!folded(counter_eight) && folded(counter_six),
+        "known bits did not hold across a counter stepping by 4");
+  Check(!folded(odd_five), "a compare a loop can satisfy was folded");
+  Check(!folded(waterfall_eight) && folded(waterfall_five),
+        "a waterfall loop's index lost the bits of its masked write");
+  Check(!folded(unmasked_five), "a lane outside the write mask was taken to hold the write");
+}
+
 } // namespace
 
 namespace Common {
@@ -739,6 +855,7 @@ int main() {
     TestControlFlowValueSurvivesReadLaneFolding();
     TestUndefinedRuntimeValueFails();
     TestKnownZeroBitsFoldIndexedReads();
+    TestKnownZeroBitsThroughLoopPhis();
     std::cout << "TypedValuePlanningTests: all cases passed\n";
     return 0;
   } catch (const std::exception &e) {

@@ -1,5 +1,6 @@
 #include "common/profiler.h"
 
+#include "common/cpuPlacement.h"
 #include "common/emulatorConfig.h"
 #include "common/hangTrace.h"
 #include "common/hangWatchdog.h"
@@ -197,6 +198,8 @@ constexpr std::array<const char*, kFrameEventCount> kFrameEventNames {
     "FrameEvent.GpuRenderingEnds.Cumulative",
     "FrameEvent.GpuDrawWriteSinks.Cumulative",
     "FrameEvent.OcclusionScopesGated.Cumulative",
+    "FrameEvent.OcclusionUnendedScopes.Cumulative",
+    "FrameEvent.OcclusionCapacityDropped.Cumulative",
     "FrameEvent.DccGpuRecords.Cumulative",
     "FrameEvent.DccGpuReuses.Cumulative",
     "FrameEvent.DccCpuFallbacks.Cumulative",
@@ -214,6 +217,10 @@ constexpr std::array<const char*, kFrameEventCount> kFrameEventNames {
     "FrameEvent.TexturePartialFallbacks.Cumulative",
     "FrameEvent.TextureChunkInvalidations.Cumulative",
     "FrameEvent.TexturePartialVerifyMismatches.Cumulative",
+    "FrameEvent.TextureKeptWrites.Cumulative",
+    "FrameEvent.TextureKeptUnmaps.Cumulative",
+    "FrameEvent.TextureKeptFallbacks.Cumulative",
+    "FrameEvent.ImageWritebackSkippedBytes.Cumulative",
     "FrameEvent.TextureOverlapKeeps.Cumulative",
     "FrameEvent.TilerScratchPoolHits.Cumulative",
     "FrameEvent.TilerScratchPoolMisses.Cumulative",
@@ -706,6 +713,7 @@ constexpr std::array<const char*, kFrameEventCount> kFrameEventNames {
     "FrameEvent.BdaAliasedImages.Cumulative",
     "FrameEvent.BdaSettleCpuDirtyPages.Cumulative",
     "FrameEvent.VariantPlanSkips.Cumulative",
+    "FrameEvent.BdaLoggedStores.Cumulative",
 };
 static_assert(kFrameEventNames.back() != nullptr, "FrameEvent names must match the enum");
 
@@ -1541,6 +1549,7 @@ void Initialize() {
 		try {
 			g_loading_publisher = std::jthread([](std::stop_token stop) {
 				tracy::SetThreadName("Loading diagnostics");
+				Common::PlaceCurrentThreadCold();
 				const auto start = FrameWaitClockNs();
 				auto log = OpenLoadingLog();
 				auto apr_log = OpenLoadingLog(true);

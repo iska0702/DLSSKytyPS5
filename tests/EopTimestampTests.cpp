@@ -1,6 +1,8 @@
 // KYTY_EOP_TIMESTAMPS unit tests (eopTimestampClock.h): the conversion of device timestamps to
-// the guest reference clock, and the life cycle of the timestamp query slots.
+// the guest reference clock, and the life cycle of the timestamp query slots. Also the
+// KYTY_GPU_TIMESTAMP_SCALE stretch (gpuTimestampScale.h).
 #include "graphics/host_gpu/renderer/eopTimestampClock.h"
+#include "graphics/guest_gpu/gpuTimestampScale.h"
 
 #include <algorithm>
 #include <atomic>
@@ -224,11 +226,57 @@ void TestQueryRingConcurrent() {
 
 } // namespace
 
+void TestGpuTimestampScale() {
+	namespace S = Libs::Graphics::GpuTimestampScale;
+	Check(S::ParsePercent(nullptr) == S::Off, "scale: unset is off");
+	Check(S::ParsePercent("") == S::Off, "scale: empty is off");
+	Check(S::ParsePercent("0") == S::Off, "scale: 0 is off");
+	Check(S::ParsePercent("100") == 100, "scale: 100");
+	Check(S::ParsePercent("115") == 115, "scale: 115");
+	Check(S::ParsePercent("200") == 200, "scale: 200");
+	Check(S::ParsePercent("99") == 99, "scale: 99 (compression)");
+	Check(S::ParsePercent("25") == 25, "scale: 25");
+	Check(S::ParsePercent("24") == S::Off, "scale: below range is off");
+	Check(S::ParsePercent("201") == S::Off, "scale: above range is off");
+	Check(S::ParsePercent("115x") == S::Off, "scale: trailing text is off");
+	Check(S::ParsePercent("-150") == S::Off, "scale: negative is off");
+
+	constexpr uint64_t anchor = 5'000'000'000ull; // 50 s on the 100 MHz reference clock
+	Check(S::Stretch(anchor + 1'000'000, anchor, 100) == anchor + 1'000'000, "scale 100: identity");
+	Check(S::Stretch(anchor + 1'000'000, anchor, 115) == anchor + 1'150'000, "scale 115: 10 ms -> 11.5 ms");
+	Check(S::Stretch(anchor + 1'000'000, anchor, 200) == anchor + 2'000'000, "scale 200: doubled");
+	Check(S::Stretch(anchor + 1'000'000, anchor, 50) == anchor + 500'000, "scale 50: 10 ms -> 5 ms");
+	Check(S::Stretch(anchor + 1'000'000, anchor, 20) == anchor + 1'000'000, "scale 20: invalid, real clock");
+	Check(S::Stretch(anchor + 1'000'000, 0, 150) == anchor + 1'000'000, "no flip yet: real clock");
+	Check(S::Stretch(anchor, anchor, 150) == anchor, "at the flip: real clock");
+	Check(S::Stretch(anchor - 10, anchor, 150) == anchor - 10, "before the anchor: real clock");
+	Check(S::Stretch(anchor + 1'000'000, anchor, 300) == anchor + 1'000'000, "invalid percent: real clock");
+	// A pair of timestamps inside one frame measures the stretched duration.
+	const auto begin = S::Stretch(anchor + 200'000, anchor, 115);
+	const auto end   = S::Stretch(anchor + 1'200'000, anchor, 115);
+	Check(end - begin == 1'150'000, "scale 115: a 10 ms span inside a frame reads 11.5 ms");
+	// Monotonic within a frame; never behind the real clock.
+	uint64_t previous = 0;
+	bool     monotonic = true, ahead = true;
+	for (uint64_t t = anchor; t < anchor + 2'000'000; t += 997) {
+		const auto v = S::Stretch(t, anchor, 133);
+		monotonic    = monotonic && v >= previous;
+		ahead        = ahead && v >= t;
+		previous     = v;
+	}
+	Check(monotonic, "scale: monotonic between flips");
+	Check(ahead, "scale: never behind the real clock");
+	// No overflow for a long time without a flip (one hour).
+	const uint64_t hour = 360'000'000'000ull;
+	Check(S::Stretch(anchor + hour, anchor, 200) == anchor + 2 * hour, "scale: one hour without a flip");
+}
+
 int main() {
 	TestDeviceDelta();
 	TestToReference();
 	TestQueryRingOrder();
 	TestQueryRingConcurrent();
+	TestGpuTimestampScale();
 	if (g_failures != 0) {
 		std::fprintf(stderr, "EopTimestampTests: %d failure(s)\n", g_failures);
 		return 1;

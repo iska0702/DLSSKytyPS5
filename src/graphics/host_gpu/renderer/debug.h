@@ -1,6 +1,7 @@
 #ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_RENDERER_DEBUG_H_
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_RENDERER_DEBUG_H_
 
+#include "common/emulatorConfig.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
 #include <cstdint>
@@ -26,6 +27,11 @@ struct ScissorRect {
 };
 
 uint32_t                 render_target_mask_slot(uint32_t mask, uint32_t slot);
+// A colour target slot with memory: an address and a format other than COLOR_INVALID. The console
+// writes nothing to a slot whose CB_COLOR_INFO.FORMAT is COLOR_INVALID, even with an address and a
+// write mask (a Demon's Souls pause menu drew with one; the resolve exited "render-target format
+// has no valid element size"). Ported from chenxiao07/KytyPS5 14137d3a0.
+[[nodiscard]] bool       render_target_bound(const HW::RenderTarget& rt);
 // KYTY_SKIP_INACTIVE_PS=1 (default off; upstream 6956b454f): a colour target counts as written
 // only when the pixel shader's export format for it (SPI_SHADER_COL_FORMAT) is not ZERO, so a
 // pixel shader that writes no such target and has no depth or coverage side effects does not run.
@@ -41,7 +47,15 @@ std::string              rt_print(const char* func, const HW::RenderTarget& rt);
 bool                     RenderIsColorTileModeLinear(Prospero::TileMode tile_mode);
 void                     hw_print(const CommandBuffer& buffer);
 void                     hw_check(const CommandBuffer& buffer);
-void                     LogDrawPhase(const char* draw_name, const char* phase);
+void                     LogDrawPhaseSlow(const char* draw_name, const char* phase);
+// Logged with --graphics-debug-dump (and a printf direction other than Silent). Called several
+// times per draw on the command processor: the inline config check keeps the disabled case a load
+// and a branch instead of a call.
+inline void LogDrawPhase(const char* draw_name, const char* phase) {
+	if (::Config::GraphicsDebugDumpEnabled()) [[unlikely]] {
+		LogDrawPhaseSlow(draw_name, phase);
+	}
+}
 ScissorRect calc_final_scissor(const HW::ScreenViewport& vp, const HW::ScanModeControl& smc,
                                vk::Extent2D extent, uint32_t viewport_index);
 // calc_final_scissor before its clamp to the framebuffer, without its log: false for a clip-rect

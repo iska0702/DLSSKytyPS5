@@ -3,6 +3,7 @@
 
 #include "common/common.h"
 #include "common/uniqueFunction.h"
+#include "graphics/host_gpu/renderer/dynamicState.h"
 #include "graphics/host_gpu/renderer/masterSemaphore.h"
 #include "graphics/host_gpu/renderer/render.h"
 
@@ -11,9 +12,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
-
 #include <queue>
-
 #include <thread>
 #include <vector>
 
@@ -46,6 +45,9 @@ public:
 	void           Flush();
 	void           Flush(SubmitInfo& submit);
 	void           FlushAndWait();
+	// Submits the current recording with an observable completion (as Wait does for the current
+	// tick, without the wait) and begins the next one; returns the submitted tick.
+	uint64_t       FlushObservable();
 	void           Finish();
 	CommandBuffer& BeginCommand();
 	uint64_t       Submit(SubmitInfo submit = {}, bool force_completion = false);
@@ -110,6 +112,9 @@ public:
 		m_command.m_user_config = binding.user_config;
 		m_command.m_shaders     = binding.shaders;
 	}
+	// The bound shader registers, writable: the command processor's own SH register writes during
+	// an op (an indirect multi-draw's per-record draw index).
+	[[nodiscard]] HW::Shader* BoundShaders() const noexcept { return m_command.m_shaders; }
 
 	[[nodiscard]] bool Active() const noexcept { return m_command.m_registers != nullptr; }
 	void                           CheckActive() const;
@@ -119,6 +124,7 @@ public:
 	[[nodiscard]] EopTimestampRing* GuestTimestamps() const noexcept { return m_eop_timestamps.get(); }
 	[[nodiscard]] bool             IsFree(uint64_t tick);
 	[[nodiscard]] MasterSemaphore& GetMasterSemaphore() noexcept { return m_master; }
+	[[nodiscard]] DynamicState&    GetDynamicState() noexcept { return m_dynamic_state; }
 	[[nodiscard]] RenderContext&   Context() const noexcept { return m_context; }
 	[[nodiscard]] GraphicContext&  Graphics() const noexcept { return m_graphics; }
 	// Recording-thread only; the owner clears it before it is destroyed. Slot 0: TextureCache
@@ -182,6 +188,7 @@ private:
 	GraphicContext&              m_graphics;
 	CommandPool                  m_command_pool;
 	CommandBuffer                m_command;
+	DynamicState                 m_dynamic_state;
 	std::queue<PendingOperation> m_pending_operations;
 	std::queue<PendingOperation> m_priority_operations;
 	std::mutex                   m_operation_mutex;

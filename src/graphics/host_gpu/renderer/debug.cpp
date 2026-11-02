@@ -4,9 +4,11 @@
 #include "common/common.h"
 #include "common/emulatorConfig.h"
 #include "common/logging/log.h"
+#include "common/onceValue.h"
 #include "graphics/guest_gpu/gpu_defs.h"
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/host_gpu/renderer/render.h"
+#include "graphics/shader/shader.h"
 
 #include <algorithm>
 #include <array>
@@ -113,10 +115,11 @@ uint32_t render_target_mask_slot(uint32_t mask, uint32_t slot) {
 }
 
 bool SkipInactivePixelShadersEnabled() {
-	static const bool enabled = [] {
+	static std::atomic<int64_t> enabled_once {Common::OnceUnset};
+	const auto enabled = static_cast<bool>(Common::Once(enabled_once, [] {
 		const char* value = std::getenv("KYTY_SKIP_INACTIVE_PS");
 		return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
-	}();
+	}));
 	return enabled;
 }
 
@@ -126,9 +129,15 @@ uint32_t DrawColorOutputFilter(const HW::Context& ctx) {
 	}
 	const auto& sh_regs     = ctx.GetShaderRegisters();
 	const auto  write_mask  = ctx.GetRenderTargetMask() & sh_regs.m_cbShaderMask;
+	// The export format is per export; KYTY_CB_SHADER_MASK_EXPORTS maps export i to its target.
+	const auto  shader_mask = ShaderCbShaderMaskExports() ? sh_regs.m_cbShaderMask : UINT32_MAX;
 	uint32_t    output_mask = 0;
-	for (uint32_t slot = 0; slot < RENDER_COLOR_ATTACHMENTS_MAX; slot++) {
-		if (sh_regs.target_output_mode[slot] != 0 && render_target_mask_slot(write_mask, slot) != 0) {
+	for (uint32_t index = 0; index < RENDER_COLOR_ATTACHMENTS_MAX; index++) {
+		const auto slot = ShaderPixelExportTarget(shader_mask, index);
+		if (slot >= RENDER_COLOR_ATTACHMENTS_MAX) {
+			break;
+		}
+		if (sh_regs.target_output_mode[index] != 0 && render_target_mask_slot(write_mask, slot) != 0) {
 			output_mask |= 1u << slot;
 		}
 	}
@@ -148,7 +157,7 @@ static bool RenderTargetMaskHasBoundMrt(const HW::Context& hw) {
 
 	uint32_t bound_targets = 0;
 	for (uint32_t i = 0; i < 8; i++) {
-		if (render_target_mask_slot(mask, i) != 0 && hw.GetRenderTarget(i).base.addr != 0) {
+		if (render_target_mask_slot(mask, i) != 0 && render_target_bound(hw.GetRenderTarget(i))) {
 			bound_targets++;
 		}
 	}
@@ -159,12 +168,16 @@ static bool RenderTargetMaskHasBoundMrt(const HW::Context& hw) {
 static uint32_t RenderTargetFirstBoundSlot(const HW::Context& hw) {
 	const auto mask = hw.GetRenderTargetMask();
 	for (uint32_t i = 0; i < 8; i++) {
-		if (render_target_mask_slot(mask, i) != 0 && hw.GetRenderTarget(i).base.addr != 0) {
+		if (render_target_mask_slot(mask, i) != 0 && render_target_bound(hw.GetRenderTarget(i))) {
 			return i;
 		}
 	}
 
 	return 0;
+}
+
+bool render_target_bound(const HW::RenderTarget& rt) {
+	return rt.base.addr != 0 && rt.info.format != Prospero::ChannelLayout::kInvalid;
 }
 
 uint32_t render_target_first_bound_slot(const CommandBuffer& buffer) {
@@ -466,7 +479,7 @@ template <typename P>
 static void ClipCheck(P& p, const HW::ClipControl& c) {
 	// dx_linear_attr_clip_enable preserves linear (noperspective) attributes at clip-generated
 	// vertices, which Vulkan provides as part of clipping and interpolation.
-	KYTY_CHECK_EXIT(p, c.user_clip_planes != 0 || c.user_clip_plane_mode != 0 ||
+	KYTY_CHECK_EXIT(p, c.user_clip_plane_mode != 0 ||
 	                       c.vertex_kill_any || c.user_clip_plane_negate_y ||
 	                       c.user_clip_plane_cull_only || c.cull_on_clipping_error_disable ||
 	                       c.force_viewport_index_from_vs_enable);
@@ -477,25 +490,18 @@ static void RcPrint(const char* func, const HW::RenderControl& c) {
 
 	LOGF("\t depth_clear_enable       = %s\n"
 	     "\t stencil_clear_enable     = %s\n"
+	     "\t copy_depth_to_color      = %s\n"
+	     "\t copy_stencil_to_color    = %s\n"
 	     "\t resummarize_enable       = %s\n"
 	     "\t stencil_compress_disable = %s\n"
 	     "\t depth_compress_disable   = %s\n"
 	     "\t copy_centroid            = %s\n"
 	     "\t copy_sample              = %" PRIu8 "\n",
 	     c.depth_clear_enable ? "true" : "false", c.stencil_clear_enable ? "true" : "false",
+	     c.copy_depth_to_color ? "true" : "false", c.copy_stencil_to_color ? "true" : "false",
 	     c.resummarize_enable ? "true" : "false", c.stencil_compress_disable ? "true" : "false",
 	     c.depth_compress_disable ? "true" : "false", c.copy_centroid ? "true" : "false",
 	     c.copy_sample);
-}
-
-template <typename P>
-static void RcCheck(P& p, const HW::RenderControl& c) {
-	// EXIT_NOT_IMPLEMENTED(c.depth_clear_enable != false);
-	// EXIT_NOT_IMPLEMENTED(c.stencil_clear_enable != false);
-	// EXIT_NOT_IMPLEMENTED(c.stencil_compress_disable != false);
-	// EXIT_NOT_IMPLEMENTED(c.depth_compress_disable != false);
-	KYTY_CHECK_EXIT(p, c.copy_centroid != false);
-	KYTY_CHECK_EXIT(p, c.copy_sample != 0);
 }
 
 static void McPrint(const char* func, const HW::ModeControl& c) {
@@ -672,7 +678,7 @@ static void AaCheck(P& p, const HW::AaSampleControl& c, const HW::AaConfig& cf) 
 	                       cf.msaa_num_samples, cf.msaa_exposed_samples, cf.max_sample_dist);
 }
 
-void LogDrawPhase(const char* draw_name, const char* phase) {
+void LogDrawPhaseSlow(const char* draw_name, const char* phase) {
 	if (graphics_debug_dump_enabled()) {
 		static std::atomic<uint32_t> log_count {0};
 		if (log_count.fetch_add(1, std::memory_order_relaxed) < 1024) {
@@ -941,9 +947,6 @@ static void HwCheck(P& p, const HW::Context& hw) {
 	VpCheck(p, vp, smc);
 	log_phase("clip");
 	ClipCheck(p, c);
-	log_phase("rc");
-	RcCheck(p, rc);
-	log_phase("depth");
 	log_phase("mode");
 	McCheck(p, mc);
 	log_phase("blend");

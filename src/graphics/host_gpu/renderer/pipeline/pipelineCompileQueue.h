@@ -16,8 +16,15 @@ namespace Libs::Graphics {
 // Tasks must publish failures to their owner (std::packaged_task does this automatically).
 class PipelineCompileQueue {
 public:
-	explicit PipelineCompileQueue(size_t threads, size_t limit): m_limit(limit) {
-		for (size_t i = 0; i < threads; ++i) m_threads.emplace_back([this] { Run(); });
+	// `thread_init` runs first on each worker (Common::PlaceCurrentThreadCold in the emulator).
+	explicit PipelineCompileQueue(size_t threads, size_t limit, std::function<void()> thread_init = {})
+	    : m_limit(limit) {
+		for (size_t i = 0; i < threads; ++i) {
+			m_threads.emplace_back([this, thread_init] {
+				if (thread_init) thread_init();
+				Run();
+			});
+		}
 	}
 	~PipelineCompileQueue() { Stop(); }
 	PipelineCompileQueue(const PipelineCompileQueue&) = delete;
@@ -43,6 +50,15 @@ public:
 			m_tasks.push_front(std::move(task));
 			return;
 		}
+	}
+	// Drops the tasks that have not started (running ones finish). Their owners must not wait for
+	// them any more: a std::packaged_task or promise left unfulfilled reports a broken promise.
+	size_t DropPending() {
+		std::lock_guard lock(m_mutex);
+		const auto dropped = m_tasks.size();
+		m_tasks.clear();
+		m_outstanding -= dropped;
+		return dropped;
 	}
 	void Stop() {
 		{

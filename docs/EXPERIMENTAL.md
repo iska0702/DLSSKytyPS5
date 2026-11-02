@@ -241,11 +241,19 @@ From int5 (`u59-windows-20261003-int5`):
     and a peak since the start of 7.5 GB instead of 12.4 GB, with no measurable change in frame rate. With another
     process holding 12 GiB or 16 GiB of the card from boot, Astro Bot reaches the Sky Garden and runs at 32-33 fps
     there. Tested on NVIDIA only.
-- Release builds compile from the PGO profile's source path (`C:\kyty-src`). clang-cl names functions in anonymous
+- Release builds compile from the PGO profile's source path (`C:\kyty-src19`). clang-cl names functions in anonymous
   namespaces after a hash of the source path, so earlier GitHub builds missed the profile for all of them.
 - Draw-run batching (`KYTY_DRAW_RUN`, `KYTY_DRAW_RUN_ACQUIRE` and `KYTY_DRAW_RUN_PUSH`, on in the preset): a draw that
   continues the previous draw's structure (targets, programs, textures, samplers) is committed as a delta
   (command-processor time -2.4%, frame rate +1.9% in a same-process A/B launch at the Astro Bot Sky Garden start view).
+  - `KYTY_DRAW_RUN_WRITES` (on in the preset): draws whose shaders write buffers continue a run too, unless a written
+    range overlaps an image the run uses (frame rate +3.5% at the Sky Garden start view, same-process A/B).
+  - `KYTY_DRAW_PREP_CLEAN_SINCE` (on in the preset): a draw prepared ahead re-checks only the guest pages that changed
+    since its preparation (+0.6%). `KYTY_DRAW_PREP_DISPATCH` (off) also prepares compute dispatches ahead; it measured
+    no gain.
+  - `KYTY_DRAW_RUN_IMAGE_EPOCH` (on in the preset): a continuation skips its image check while no image property the
+    check reads has changed (+1.0%). `KYTY_DRAW_RUN_RECALL` (off) lets a draw continue an earlier run of the same
+    render pass; it measured 0-1%.
 - Possible fixes for device-lost (masterSemaphore) GPU hangs, the `VK_ERROR_DEVICE_LOST` crashes reported on RTX 40
   and 50 series cards, ported from Senaxx's fork. None of them is confirmed to fix those crashes.
   - `S_MEMREALTIME` reads the GPU clock (`VK_KHR_shader_clock`) instead of returning a fixed placeholder.
@@ -271,7 +279,8 @@ From int5 (`u59-windows-20261003-int5`):
     queries (`KYTY_RECORDER_DESCRIPTOR_SETS`, `KYTY_PUSH_SHADOW_FRESH_SKIP`, `KYTY_META_CLEAR_MEMO`,
     `KYTY_PENDING_REFRESH_US`).
 - Lower VRAM use, also behind preset flags:
-  - sparse residency for partially resident textures and for the BDA page table;
+  - sparse residency for partially resident textures (`KYTY_TEXTURE_SPARSE_RESIDENCY=auto`: only on cards that
+    report less than 15 GiB of VRAM, the 16 GB class and up keep full mip chains) and for the BDA page table;
   - idle limits for the native image pool and the tiler scratch pool;
   - images unused for 600 frames are freed.
 - Upstream KytyPS5 changes up to the first sync: controller, audio and compatibility fixes, and the layered VideoOut
@@ -292,7 +301,7 @@ bundled preset. This release was checked with single timed runs, not with an alt
 
 ## Launching
 
-Extract the archive and open `launcher.exe` directly. When `u59-preset.json` is beside the executable, the launcher
+Extract the archive and open `kyty_launcher.exe` directly (named `launcher.exe` before upsync 5). When `u59-preset.json` is beside the executable, the launcher
 applies its environment and clears inherited KYTY/TRACY variables. The archive contains no `Kyty.ini`: the launcher uses
 the shared settings file `C:\ProgramData\Kyty\Kyty.ini`, so existing game directories and per-game settings stay
 available. If an older archive left a `Kyty.ini` beside the launcher, move it aside. No game files, saves, caches or
@@ -313,6 +322,22 @@ to `_device_fault.nv-gpudmp` in its working folder. Send that console text (from
 `.nv-gpudmp` file if there is one, the GPU model and the driver version. The diagnostics can cost speed, so remove the
 line again afterwards.
 
+## If Astro Bot stops with "too many objects/batches in this scene"
+
+This is the game's own check (`command_buffer_writer.ppr.cpp:31`, then a crash at `pc=0x9004a0c3e`): one of its
+per-frame command buffers (7, 7, 4, 4 and 6 MiB) ran full. Add `"KYTY_AGC_CB_WATERMARK": "1"` to `u59-preset.json`
+and run until it happens again. The console then prints each buffer's highest use so far (`Agc cb watermark: ... new
+peak`), split into the emulator's packets ("library") and the game's own data ("game"), and a summary every 10 s. The
+crash report also prints the 64 bytes at each register that points to memory; for this crash `[rbx]` is the full
+buffer's state. Send the console text from the last summary line on. The diagnostic costs a little speed.
+
+Since the 2026-10-22 fix the emulator doubles these buffers for Astro Bot 01.018.000 before the game starts
+(`KYTY_ASTRO_CB_SCALE`, default `2`; `1` keeps the game's sizes, `3`/`4` scale further; the console prints
+`Game patch: Astro Bot draw-thread command buffers x2`). The game's Draw Geometry thread uploads its mesh-deformer bone
+palettes into this buffer; when the thread falls a frame behind, one buffer takes two frames of that work (about
+11.5 MiB in speedrun_inflator, where 7 MiB ran full on every boot). On dual-CCD X3D processors the game's threads now
+also use the second CCD (`KYTY_VCACHE_GUEST=all`, default; `hot` keeps them on the V-cache CCD as in int19.3-int20).
+
 ## Caveats
 
 - Program caches are reused only from a build with the same shader translation. Otherwise the first launch of each
@@ -327,7 +352,8 @@ line again afterwards.
 - The PGO profile comes from Astro Bot only. Other games run with code laid out for Astro Bot.
 - Microsoft Defender flagged the int7 `launcher.exe` as `Trojan:Win32/Bearfoos.A!ml` on the test PC. The `!ml` marks a
   machine-learning verdict, not the signature of known malware. The launcher is built by the GitHub Actions workflow
-  `.github/workflows/u59-windows-release.yml` from `src/launcher` in this repository.
+  `.github/workflows/u59-windows-release.yml` from `src/launcher` in this repository. Since upsync 5 it is named
+  `kyty_launcher.exe`, as upstream renamed it.
 - The upstream controller and audio changes were not tested by hand.
 - The preset also sets `KYTY_SRT_VARIANT_READS=1`, which Demon's Souls needs.
 
@@ -338,13 +364,16 @@ Release with Ninja in an x64 Visual Studio developer shell, as in `.github/workf
 
 - Use clang-cl, lld-link and llvm-lib from LLVM 22.1.3: the profile needs the compiler version that recorded it.
   Standard-library code only matches it with the same MSVC headers (14.51, Visual Studio 2026 18.10).
-- Configure from `C:\kyty-src`, a directory junction to the checkout (`mklink /J C:\kyty-src <checkout>`, then
-  `cmake -S C:\kyty-src -B <new build directory>`). clang-cl names functions in anonymous namespaces after a hash
+- Configure from `C:\kyty-src19`, a directory junction to the checkout (`mklink /J C:\kyty-src19 <checkout>`, then
+  `cmake -S C:\kyty-src19 -B <new build directory>`). clang-cl names functions in anonymous namespaces after a hash
   of the source path, so a build from any other path loses their part of the profile.
-- Add `-DKYTY_EMULATOR_IPO=ON` and `-DKYTY_PGO_USE=C:/kyty-src/tools/pgo/u59-int9-sg-1.profdata`. Without
+- Add `-DKYTY_EMULATOR_IPO=ON` and `-DKYTY_PGO_USE=C:/kyty-src19/tools/pgo/u59-int21-1.profdata`. Without
   `KYTY_PGO_USE` the build works, but without the profile's speedup.
+- Add `-DKYTY_CP_DIAGNOSTICS=OFF`, as the release does: it compiles out the command processor's per-draw
+  developer statistics (`KYTY_CP_COMMIT_STATS`, `KYTY_BUFFER_LOOKUP_STATS`, which are then ignored). The hang
+  watchdog, crash context and hang trace are unaffected. Keep the default `ON` to use those statistics.
 - Build `launcher` and `kyty_emulator`, install to `_Build/windows/install`, and copy `tools/u59-preset.json` beside
-  `launcher.exe`.
+  `kyty_launcher.exe`.
 
 The Windows release is produced by a tagged GitHub Actions build. Original licenses and credits remain intact.
 Personal handoffs, local editor configuration, captures, saves and caches are excluded. Historical results and their

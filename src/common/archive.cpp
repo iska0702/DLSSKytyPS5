@@ -1,5 +1,6 @@
 #include "common/archive.h"
 
+#include "common/cpuPlacement.h"
 #include "common/stringUtils.h"
 
 #include <algorithm>
@@ -210,6 +211,7 @@ private:
 	}
 
 	void Loop() {
+		Common::PlaceCurrentThreadCold(); // file I/O
 		for (;;) {
 			Request* request;
 			{

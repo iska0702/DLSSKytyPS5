@@ -5,6 +5,7 @@
 #include "graphics/host_gpu/vulkanCommon.h"
 
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -21,6 +22,8 @@ struct SystemOverlayVisualState {
 	uint64_t revision;
 };
 
+void                     InitializeSplashScreen(const std::filesystem::path& sce_sys);
+void                     HideSplashScreen();
 void                     InitializeSystemOverlayInput(SDL_Window* window);
 void                     ShutdownSystemOverlayInput();
 bool                     ProcessSystemOverlayInput(const SDL_Event& event);

@@ -5,6 +5,7 @@
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace Libs::Graphics::ShaderRecompiler::Frontend {
@@ -33,5 +34,13 @@ struct TranslateOptions {
 
 IR::Program TranslateProgram(const Decoder::Program& decoded, const CFG::Graph& cfg,
                              const TranslateOptions& options);
+
+// KYTY_LANE_LOCAL (LaneLocal.cpp, chenxiao07/KytyPS5 9907780e1 + 9bb47e15d): a wave64 program whose
+// results in each lane depend on no lane outside its 32-lane half. On a host with 32-wide subgroups it
+// runs one guest lane per invocation instead of two. reason: why not. uniform_loads: proven only with
+// KYTY_LANE_LOCAL_UNIFORM_LOADS=1 (buffer loads taken as uniform; not used here: such a program keeps
+// two lanes per invocation).
+bool IsWaveLaneLocal(const Decoder::Program& program, std::string* reason = nullptr,
+                     bool* uniform_loads = nullptr);
 
 } // namespace Libs::Graphics::ShaderRecompiler::Frontend

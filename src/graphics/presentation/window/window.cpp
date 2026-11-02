@@ -1,6 +1,4 @@
-#include "graphics/presentation/window.h"
-
-#include <SDL3/SDL.h>
+﻿#include "graphics/presentation/window.h"
 
 #include "common/assert.h"
 #include "common/common.h"
@@ -8,14 +6,15 @@
 #include "common/file.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
+#include "common/stringUtils.h"
 #include "common/systemInfo.h"
 #include "common/threads.h"
 #include "common/timer.h"
-#include "common/stringUtils.h"
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/host_gpu/vulkanCommon.h"
+#include "graphics/presentation/performanceOverlay.h"
 #include "graphics/presentation/renderDoc.h"
 #include "graphics/presentation/systemOverlay.h"
 #include "graphics/presentation/window/hostInput.h"
@@ -26,15 +25,16 @@
 #include "graphics/presentation/dlss/dlssManager.h"
 #include "graphics/presentation/dlss/fsrManager.h"
 
+#include <SDL3/SDL.h>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fmt/format.h>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 #include <vulkan/vk_platform.h>
-#include <filesystem>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_SIMD
@@ -58,25 +58,6 @@ struct EventKeyboard {
 	double   timestamp_seconds;
 };
 
-static uint32_t ControllerButtonToPadButton(int button) {
-	switch (button) {
-		case SDL_GAMEPAD_BUTTON_SOUTH: return Controller::PAD_BUTTON_CROSS;
-		case SDL_GAMEPAD_BUTTON_EAST: return Controller::PAD_BUTTON_CIRCLE;
-		case SDL_GAMEPAD_BUTTON_WEST: return Controller::PAD_BUTTON_SQUARE;
-		case SDL_GAMEPAD_BUTTON_NORTH: return Controller::PAD_BUTTON_TRIANGLE;
-		case SDL_GAMEPAD_BUTTON_START: return Controller::PAD_BUTTON_OPTIONS;
-		case SDL_GAMEPAD_BUTTON_LEFT_STICK: return Controller::PAD_BUTTON_L3;
-		case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return Controller::PAD_BUTTON_R3;
-		case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return Controller::PAD_BUTTON_L1;
-		case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return Controller::PAD_BUTTON_R1;
-		case SDL_GAMEPAD_BUTTON_DPAD_UP: return Controller::PAD_BUTTON_UP;
-		case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return Controller::PAD_BUTTON_DOWN;
-		case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return Controller::PAD_BUTTON_LEFT;
-		case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return Controller::PAD_BUTTON_RIGHT;
-		case SDL_GAMEPAD_BUTTON_TOUCHPAD: return Controller::PAD_BUTTON_TOUCH_PAD;
-		default: return 0;
-	}
-}
 
 static Controller::Axis ControllerAxisFromSdl(int axis_id) {
 	switch (axis_id) {
@@ -272,6 +253,15 @@ static void GameEventMouse([[maybe_unused]] const EventMouse& mb) {
 		}
 
 		HostInputMouseButton(mouse_button, mb.down);
+		if (!mb.touch && mb.left) {
+			HostInputMouseTouchPad(mb.down, static_cast<float>(mb.x), static_cast<float>(mb.y));
+		}
+	} else if (mb.motion && !mb.touch) {
+		if (mb.left) {
+			HostInputMouseTouchPad(true, static_cast<float>(mb.x), static_cast<float>(mb.y));
+		} else {
+			HostInputMouseMotion(static_cast<float>(mb.x), static_cast<float>(mb.y));
+		}
 	}
 }
 
@@ -320,6 +310,7 @@ static void GameEventController([[maybe_unused]] const EventController& f) {
 	}
 
 	if (f.removed) {
+		HostInputDisconnectGamepad(f.id);
 		if (auto* pad = SDL_GetGamepadFromID(f.id); pad != nullptr) {
 			Controller::Disconnect(f.id);
 			SDL_CloseGamepad(pad);
@@ -327,17 +318,22 @@ static void GameEventController([[maybe_unused]] const EventController& f) {
 	}
 
 	if (f.down || f.up) {
-		const auto button = ControllerButtonToPadButton(f.button);
-		if (button != 0) {
-			Controller::SetButton(f.id, button, f.down);
-		}
+		HostInputPadButton(f.id, f.button, f.down);
 	}
 
 	if (f.axis) {
-		const auto axis = ControllerAxisFromSdl(f.axis_id);
-		if (axis != Controller::Axis::AxisMax) {
-			Controller::SetAxis(f.id, axis,
+		if (f.axis_id == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ||
+		    f.axis_id == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) {
+			HostInputPadTrigger(f.id, f.axis_id == SDL_GAMEPAD_AXIS_LEFT_TRIGGER,
 			                    ControllerAxisValueFromSdl(f.axis_id, f.axis_value));
+		} else if (const auto axis = ControllerAxisFromSdl(f.axis_id);
+		           axis != Controller::Axis::AxisMax) {
+			const int value = ControllerAxisValueFromSdl(f.axis_id, f.axis_value);
+			if ((f.axis_id == SDL_GAMEPAD_AXIS_LEFTX || f.axis_id == SDL_GAMEPAD_AXIS_LEFTY) &&
+			    HostInputGamepadAxis(f.id, f.axis_id == SDL_GAMEPAD_AXIS_LEFTX, value)) {
+				return;
+			}
+			Controller::SetAxis(f.id, axis, value);
 		}
 	}
 }
@@ -471,6 +467,7 @@ void WindowContext::ProcessWindowEvent(const SDL_WindowEvent& event) {
 			break;
 		case SDL_EVENT_WINDOW_MOUSE_LEAVE:
 			LOGF("Mouse left window %" PRIu32 "\n", window_event.windowID);
+			HostInputSetTouchPadMode(false);
 			break;
 		case SDL_EVENT_WINDOW_FOCUS_GAINED:
 			LOGF("Window %" PRIu32 " gained keyboard focus\n", window_event.windowID);
@@ -515,12 +512,37 @@ void WindowContext::ProcessDisplayEvent(const SDL_DisplayEvent& display) {
 void WindowContext::ProcessEvent(double time_s) {
 	auto& game  = loop;
 	auto* event = &game.event;
-	if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) &&
-	    event->key.key == SDLK_F7) {
-		if (event->type == SDL_EVENT_KEY_DOWN && event->key.repeat == 0) {
-			HostInputToggleMouseToJoystick();
+	if (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) {
+		const bool pressed = event->type == SDL_EVENT_KEY_DOWN && event->key.repeat == 0;
+		switch (event->key.key) {
+			case SDLK_F7:
+				if (pressed) {
+					HostInputToggleMouseToJoystick();
+				}
+				return;
+			case SDLK_F8:
+				if (pressed) {
+					Controller::CycleKeyboardPlayer();
+				}
+				return;
+#if defined(__APPLE__)
+			case SDLK_P:
+				if ((event->key.mod & SDL_KMOD_GUI) == 0) {
+					break;
+				}
+				[[fallthrough]];
+#endif
+			case SDLK_F2:
+				if (pressed) {
+					if ((event->key.mod & SDL_KMOD_SHIFT) != 0) {
+						TogglePerformanceOverlayDetails();
+					} else {
+						TogglePerformanceOverlay();
+					}
+				}
+				return;
+			default: break;
 		}
-		return;
 	}
 	if (ProcessSystemOverlayInput(*event)) {
 		return;
@@ -775,6 +797,10 @@ void WindowContext::Run() {
 	loop.need_exit = false;
 	loop.paused.store(false, std::memory_order_release);
 
+	constexpr uint64_t title_interval_ms = 1000;
+	auto               title_time        = SDL_GetTicks();
+	auto               title_frames      = loop.presented_frames.load(std::memory_order_relaxed);
+
 	while (!loop.need_exit) {
 		if (loop.paused.load(std::memory_order_acquire)) {
 			if (!timer.IsPaused()) {
@@ -784,7 +810,20 @@ void WindowContext::Run() {
 			timer.Resume();
 		}
 
-		if (!HostInputWaitEvent(&loop.event)) {
+		// Refresh the title on the main thread without making presentation wait for it.
+		const auto now     = SDL_GetTicks();
+		const auto elapsed = now - title_time;
+		if (elapsed >= title_interval_ms) {
+			const auto frames = loop.presented_frames.load(std::memory_order_relaxed);
+			if (frames != 0) {
+				UpdateTitle(frames, static_cast<double>(frames - title_frames) * 1000.0 /
+				                        static_cast<double>(elapsed));
+			}
+			title_time   = now;
+			title_frames = frames;
+		}
+		const auto wait_ms = static_cast<int>(title_interval_ms - (now - title_time));
+		if (!HostInputWaitEvent(&loop.event, wait_ms)) {
 			continue;
 		}
 		ProcessEvent(timer.GetTimeS());
@@ -965,22 +1004,7 @@ void WindowContext::UpdateIcon() {
 	}
 }
 
-// KYTY_TITLE_UPDATE=sync restores the synchronous title update (the present thread waits for the
-// window thread).
-static bool TitleUpdateSync() {
-	static const bool sync = [] {
-		const auto* value = std::getenv("KYTY_TITLE_UPDATE");
-		return value != nullptr && std::strcmp(value, "sync") == 0;
-	}();
-	return sync;
-}
-
-static std::mutex   g_title_mutex;
-static std::string  g_title_text;
-static SDL_WindowID g_title_window_id     = 0;
-static bool         g_title_update_queued = false;
-
-void WindowContext::UpdateTitle() {
+void WindowContext::UpdateTitle(uint64_t frame_num, double current_fps) {
 	static char title[128];
 	static char title_id[12];
 	static char app_ver[12];
@@ -990,10 +1014,6 @@ void WindowContext::UpdateTitle() {
 	static bool has_app_ver =
 	    Loader::SystemContentParamSfoGetString("APP_VER", app_ver, sizeof(app_ver));
 	static const std::string processor_name = Common::GetSystemInfo().ProcessorName;
-	static uint64_t fps_start   = Common::Timer::QueryPerformanceCounter();
-	static uint64_t frame_num   = 0;
-	static uint64_t fps_frames  = 0;
-	static double   current_fps = 0.0;
 
 #if KYTY_BUILD == KYTY_BUILD_DEBUG
 	static constexpr auto build_type = "Debug";
@@ -1002,17 +1022,6 @@ void WindowContext::UpdateTitle() {
 #else
 	static constexpr auto build_type = "Unknown";
 #endif
-
-	const auto now       = Common::Timer::QueryPerformanceCounter();
-	const auto frequency = Common::Timer::QueryPerformanceFrequency();
-	frame_num++;
-	fps_frames++;
-	if (now - fps_start >= frequency) {
-		current_fps = static_cast<double>(fps_frames) * static_cast<double>(frequency) /
-		              static_cast<double>(now - fps_start);
-		fps_start   = now;
-		fps_frames  = 0;
-	}
 
 	const auto* device_name = graphic_ctx.GetPhysicalDeviceProperties().deviceName.data();
 	auto        dlss_info   = Config::FSREnabled() ? FSRManager::Instance().GetOverlayInfo() : DLSSManager::Instance().GetOverlayInfo();
@@ -1034,49 +1043,7 @@ void WindowContext::UpdateTitle() {
 	    (has_title_id ? ", " : ""), (has_app_ver ? app_ver : ""), (has_app_ver ? " " : ""),
 	    device_name, processor_name, frame_num, fps_text, dlss_info);
 
-	if (TitleUpdateSync()) {
-		struct TitleUpdate {
-			SDL_Window*  window;
-			std::string* text;
-		} update {window, &text};
-		EXIT_IF(!SDL_RunOnMainThread(
-		    [](void* data) {
-			    auto& title = *static_cast<TitleUpdate*>(data);
-			    SDL_SetWindowTitle(title.window, title.text->c_str());
-		    },
-		    &update, true));
-		return;
-	}
-
-	// The present thread calls this before it fires the flip events, so it must not wait for the
-	// window thread: that thread runs at the guest threads' priority and, when every CPU is busy,
-	// can stay ready for a whole quantum. The newest title goes into one slot, and at most one
-	// main-thread callback is queued to apply it (bounded, however long the main thread lags).
-	{
-		std::lock_guard lock(g_title_mutex);
-		g_title_text      = std::move(text);
-		g_title_window_id = SDL_GetWindowID(window);
-		if (g_title_update_queued) {
-			return;
-		}
-		g_title_update_queued = true;
-	}
-	EXIT_IF(!SDL_RunOnMainThread(
-	    [](void* /*data*/) {
-		    std::string  pending_text;
-		    SDL_WindowID window_id = 0;
-		    {
-			    std::lock_guard lock(g_title_mutex);
-			    pending_text          = g_title_text;
-			    window_id             = g_title_window_id;
-			    g_title_update_queued = false;
-		    }
-		    // The window may be gone by the time the main thread runs this.
-		    if (auto* target = SDL_GetWindowFromID(window_id); target != nullptr) {
-			    SDL_SetWindowTitle(target, pending_text.c_str());
-		    }
-	    },
-	    nullptr, false));
+	SDL_SetWindowTitle(window, text.c_str());
 }
 
 } // namespace Libs::Graphics

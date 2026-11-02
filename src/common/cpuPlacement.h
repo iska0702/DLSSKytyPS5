@@ -49,6 +49,30 @@
 // threads run there again. Without KYTY_CPU_SETS the other process's sets become the constraint the
 // layout is computed in (Process Lasso's (0-31) leaves it unchanged).
 //
+// KYTY_VCACHE_PLACEMENT=auto|0|1 (default auto): dual-CCD X3D processors (7950X3D, 7900X3D,
+// 9950X3D, ...; one CCD has 3D V-cache) without a Process Lasso-like rule.
+// - The V-cache CCD is the L3 cache group that measures largest (GetLogicalProcessorInformationEx
+//   cache relations), not the one with most cores or the lowest index. A chip counts as dual-CCD X3D
+//   only when there are two or more L3 groups and the largest is at least 1.5 times every other
+//   (96 against 32 MiB). One L3 (7800X3D, 9800X3D, Intel hybrid) or equal L3s (7950X): no change.
+// - auto: only when no external CPU-set or affinity rule is active: the process affinity mask is
+//   the whole system's, no process default CPU sets were set before startup, KYTY_CPU_SETS is
+//   unset, and no other process replaces the process default CPU sets later. When one appears
+//   (Process Lasso applies its rule about 0.6 s after the process starts) the placement is dropped
+//   for good and the KYTY_CPU_RESERVE behaviour without it applies. 1: also with an external rule
+//   (still inside the process affinity mask). 0: off.
+// - Hot threads keep to the V-cache CCD through the process default CPU sets: guest threads (the
+//   guest pthreads inherit them), the main guest thread, the CP, the recorder, draw-prep workers,
+//   service, completion and present threads, and driver threads. KYTY_CPU_RESERVE's cores are taken
+//   inside the V-cache CCD. Cold threads (PlaceCurrentThreadCold: shader and pipeline compile
+//   workers, pipeline journal/cache savers, file I/O, audio3d playback, diagnostics and monitors)
+//   get the other CCD through their thread-selected CPU sets.
+// - KYTY_VCACHE_GUEST=all (default): guest threads (PlaceCurrentThreadGuest) run on every allowed
+//   processor outside the reserved cores, both CCDs, through their thread-selected CPU sets.
+//   hot: only the hot processors (int19.3-int20); cold: only the other CCD. With hot, Astro Bot's
+//   threads got 14 logical processors and its Draw Geometry thread fell behind (Bug C).
+// - One "Kyty V-cache placement" line logs the decision at startup and whenever it changes.
+//
 // Placement samples, with the profiler's aggregates, the hang trace or
 // KYTY_CPU_PLACEMENT_SAMPLES=1: the CP, the recorder, guest threads, draw-prep workers and service
 // threads note where they run.
@@ -85,14 +109,63 @@ struct CpuLayout {
 	uint64_t              recorder_mask = 0;
 	uint64_t              general_mask  = 0;
 	std::string           description; // the choice, or why nothing was reserved
+	// KYTY_VCACHE_PLACEMENT: general_ids/general_mask are the hot processors (the V-cache CCD
+	// without the reserved cores) and the cold threads get these.
+	bool                  vcache    = false;
+	std::vector<uint32_t> cold_ids;
+	uint64_t              cold_mask = 0;
+};
+
+// One L3 cache group: the logical processors sharing it (group-relative mask) and its size.
+struct L3Cache {
+	uint16_t group = 0;
+	uint64_t mask  = 0;
+	uint64_t bytes = 0;
+};
+
+// The L3 groups seen as a V-cache topology (group 0 only).
+struct VCacheTopology {
+	bool        dual         = false; // two or more L3 groups, the largest clearly larger
+	uint32_t    groups       = 0;     // L3 groups in group 0
+	uint64_t    vcache_mask  = 0;     // the logical processors of the largest L3
+	uint64_t    other_mask   = 0;     // those of every smaller L3
+	uint64_t    vcache_bytes = 0;
+	uint64_t    other_bytes  = 0; // the largest of the smaller ones
+	std::string description;
+};
+
+enum class VCacheMode : uint8_t { Auto, Off, On };
+
+struct VCacheDecision {
+	bool        engage = false;
+	std::string reason; // why not, or what applies
 };
 
 inline constexpr uint32_t kMinGeneralProcessors = 6;
 
-// Pure (tested): the reserved cores for `sets` (only group 0 is considered).
+// Pure (tested): the reserved cores for `sets` (only group 0 is considered). The cache holding most
+// allowed processors is used; ties go to the cache with processors in `preferred_mask` (the V-cache
+// CCD), then to the lower index.
 [[nodiscard]] CpuLayout ComputeCpuLayout(const std::vector<CpuSetInfo>& sets, CpuReserveMode mode,
                                          int      forced_cp_logical,
-                                         uint32_t min_general = kMinGeneralProcessors);
+                                         uint32_t min_general    = kMinGeneralProcessors,
+                                         uint64_t preferred_mask = 0);
+// Pure (tested): the L3 groups as a V-cache topology (KYTY_VCACHE_PLACEMENT).
+[[nodiscard]] VCacheTopology DetectVCache(const std::vector<L3Cache>& caches);
+// Pure (tested): whether the V-cache placement applies. `external_rule`: an affinity or CPU-set
+// rule of another process was seen; `cpu_sets`: KYTY_CPU_SETS is set.
+[[nodiscard]] VCacheDecision DecideVCachePlacement(VCacheMode mode, const VCacheTopology& topology,
+                                                   bool external_rule, bool cpu_sets);
+// Pure (tested): the layout with the V-cache placement: the reserved cores (`mode`) and the hot
+// processors in the V-cache CCD, the cold ones in the other CCDs. `vcache` false (and the reason in
+// the description) when it cannot apply: no allowed processor on either side, fewer than
+// `min_general` hot ones, or the reservation does not fit in the V-cache CCD.
+[[nodiscard]] CpuLayout ComputeVCacheLayout(const std::vector<CpuSetInfo>& sets, CpuReserveMode mode,
+                                            int forced_cp_logical, const VCacheTopology& topology,
+                                            uint32_t min_general = kMinGeneralProcessors);
+// KYTY_VCACHE_PLACEMENT=auto|0|1 (also off|on); nullptr is auto. `valid` false: unknown text.
+[[nodiscard]] VCacheMode ParseVCacheMode(const char* text, bool* valid = nullptr);
+[[nodiscard]] VCacheMode GetVCacheMode(); // evaluated once
 // Pure (tested): the hard affinity a thread with `affinity` should get so that it stays off the
 // reserved cores: unchanged when nothing is reserved or it already meets the general processors
 // (the CPU sets narrow it), otherwise every general processor.
@@ -119,6 +192,15 @@ void MaintainCpuPlacement();
 // core in cp+recorder mode, otherwise the general processors. Other roles keep the process
 // default. No-op when nothing is reserved.
 void PlaceCurrentThread(ThreadRole role);
+// A cold thread (compile and pipeline workers, file I/O, audio, diagnostics): with the V-cache
+// placement it runs on the other CCD, otherwise nothing changes. Idempotent per thread and cheap
+// after the first call; the thread is forgotten when it exits. Never call it from a thread that
+// may run hot work (the CP, guest threads, draw-prep workers).
+void PlaceCurrentThreadCold();
+// A guest thread (guest pthreads, the guest main thread): with the V-cache placement and
+// KYTY_VCACHE_GUEST=all (default) it runs on every allowed processor outside the reserved cores,
+// otherwise on the process default. Idempotent per thread; forgotten when the thread exits.
+void PlaceCurrentThreadGuest();
 // The current layout (a copy; tests and logs).
 [[nodiscard]] CpuLayout CurrentCpuLayout();
 

@@ -458,6 +458,12 @@ void Replay(const Header& header, Exec& exec, ReplayState& state, MismatchHandle
 			exec.dispatch(p.x, p.y, p.z);
 			break;
 		}
+		case Op::DispatchBase: {
+			const auto& p = reader.Get<DispatchBasePacket>();
+			check(VerifyHash::Value(op, p.base_x, p.base_y, p.base_z, p.x, p.y, p.z));
+			exec.dispatchBase(p.base_x, p.base_y, p.base_z, p.x, p.y, p.z);
+			break;
+		}
 		case Op::DispatchIndirect: {
 			const auto& p           = reader.Get<DispatchIndirectPacket>();
 			uint64_t    buffer_bits = 0;
@@ -515,6 +521,40 @@ void Replay(const Header& header, Exec& exec, ReplayState& state, MismatchHandle
 			check(VerifyHash::Value(op, pool_bits, p.query, p.stage));
 			const auto stage = vk::PipelineStageFlags2(static_cast<VkPipelineStageFlags2>(p.stage));
 			exec.writeTimestamp2(stage, p.pool, p.query);
+			break;
+		}
+		case Op::HostCopy: {
+			const auto& p = reader.Get<HostCopyPacket>();
+			check(VerifyHash::Value(op, p.destination, p.source, p.size));
+			exec.hostCopy(reinterpret_cast<void*>(static_cast<uintptr_t>(p.destination)), p.source,
+			              p.size);
+			break;
+		}
+		case Op::WriteBufferMarker: {
+			const auto& p           = reader.Get<WriteBufferMarkerPacket>();
+			uint64_t    buffer_bits = 0;
+			const auto  raw         = static_cast<VkBuffer>(p.buffer);
+			std::memcpy(&buffer_bits, &raw, sizeof(buffer_bits));
+			check(VerifyHash::Value(op, buffer_bits, p.offset, p.stage, p.marker));
+			exec.writeBufferMarkerAMD(static_cast<vk::PipelineStageFlagBits>(p.stage), p.buffer, p.offset,
+			                          p.marker);
+			break;
+		}
+		case Op::ClearColorImage: {
+			const auto&         p      = reader.Get<ClearImagePacket>();
+			const auto*         ranges = reader.GetArray<vk::ImageSubresourceRange>(p.count);
+			vk::ClearColorValue color {};
+			std::memcpy(&color, p.value, sizeof(color));
+			check(VerifyHash::ClearColorImage(p.image, p.layout, color, p.count, ranges));
+			exec.clearColorImage(p.image, p.layout, &color, p.count, ranges);
+			break;
+		}
+		case Op::ClearDepthStencilImage: {
+			const auto& p      = reader.Get<ClearImagePacket>();
+			const auto* ranges = reader.GetArray<vk::ImageSubresourceRange>(p.count);
+			const vk::ClearDepthStencilValue value {std::bit_cast<float>(p.value[0]), p.value[1]};
+			check(VerifyHash::ClearDepthStencilImage(p.image, p.layout, value, p.count, ranges));
+			exec.clearDepthStencilImage(p.image, p.layout, &value, p.count, ranges);
 			break;
 		}
 	}

@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/frontend/translate/Translator.h"
 
 #include <bit>
+#include <utility>
 
 namespace Libs::Graphics::ShaderRecompiler::Frontend {
 
@@ -27,10 +28,12 @@ void Translator::EmitCompareConstant(const Decoder::Instruction& inst, bool valu
 }
 
 void Translator::EmitIntegerCompare(const Decoder::Instruction& inst, IR::ValueOpcode opcode,
-                                    IR::Type type, bool scalar, bool cmpx) {
+                                    IR::Type type, bool scalar, bool cmpx, bool swap_operands) {
+	// The equality compares share their IR opcode with the unsigned ones.
 	const bool signed_64 = opcode == IR::ValueOpcode::SLessThan64 ||
 	                       opcode == IR::ValueOpcode::SLessThanEqual64 ||
 	                       inst.opcode == Decoder::Opcode::V_CMP_EQ_I64 ||
+	                       inst.opcode == Decoder::Opcode::V_CMPX_EQ_I64 ||
 	                       inst.opcode == Decoder::Opcode::V_CMP_NE_I64 ||
 	                       inst.opcode == Decoder::Opcode::V_CMPX_NE_I64;
 	const auto read = [&](const Decoder::Operand& operand) {
@@ -41,8 +44,12 @@ void Translator::EmitIntegerCompare(const Decoder::Instruction& inst, IR::ValueO
 		}
 		return ReadOperand(operand, type);
 	};
-	EmitCompareResult(inst, IR::U1(ir.Emit(opcode, {read(inst.src0), read(inst.src1)})), scalar,
-	                  cmpx);
+	auto lhs = read(inst.src0);
+	auto rhs = read(inst.src1);
+	if (swap_operands) {
+		std::swap(lhs, rhs);
+	}
+	EmitCompareResult(inst, IR::U1(ir.Emit(opcode, {lhs, rhs})), scalar, cmpx);
 }
 
 void Translator::EmitInteger16Compare(const Decoder::Instruction& inst, IR::ValueOpcode opcode,
@@ -64,19 +71,24 @@ void Translator::EmitFloatCompare(const Decoder::Instruction& inst, IR::ValueOpc
 	EmitCompareResult(inst, IR::U1(ir.Emit(opcode, {lhs, rhs}, flags)), false, cmpx);
 }
 
-void Translator::EmitFloatOrderedCompare(const Decoder::Instruction& inst, bool ordered, bool cmpx) {
-	const auto lhs       = IR::F32(ReadOperand(inst.src0, IR::Type::F32));
-	const auto rhs       = IR::F32(ReadOperand(inst.src1, IR::Type::F32));
-	const auto unordered = ir.LogicalOr(IR::U1(ir.Emit(IR::ValueOpcode::FPIsNan32, {lhs})),
-	                                    IR::U1(ir.Emit(IR::ValueOpcode::FPIsNan32, {rhs})));
+void Translator::EmitFloatOrderedCompare(const Decoder::Instruction& inst, bool ordered, bool cmpx,
+                                         bool is64) {
+	const auto type      = is64 ? IR::Type::F64 : IR::Type::F32;
+	const auto is_nan_op = is64 ? IR::ValueOpcode::FPIsNan64 : IR::ValueOpcode::FPIsNan32;
+	const auto lhs       = ReadOperand(inst.src0, type);
+	const auto rhs       = ReadOperand(inst.src1, type);
+	const auto unordered = ir.LogicalOr(IR::U1(ir.Emit(is_nan_op, {lhs})),
+	                                    IR::U1(ir.Emit(is_nan_op, {rhs})));
 	EmitCompareResult(inst, ordered ? ir.LogicalNot(unordered) : unordered, false, cmpx);
 }
 
-void Translator::EmitFloatClassCompare(const Decoder::Instruction& inst, bool cmpx) {
-	const auto value = ReadOperand(inst.src0, IR::Type::F32);
-	const auto mask  = ReadOperand(inst.src1, IR::Type::U32);
-	EmitCompareResult(inst, IR::U1(ir.Emit(IR::ValueOpcode::FPCmpClass32, {value, mask})), false,
-	                  cmpx);
+void Translator::EmitFloatClassCompare(const Decoder::Instruction& inst, bool cmpx, bool half) {
+	const auto value = half ? IR::Value(Read16LaneBits(inst.src0, false))
+	                        : ReadOperand(inst.src0, IR::Type::F32);
+	const auto mask = half ? IR::Value(Read16LaneBits(inst.src1, false))
+	                      : ReadOperand(inst.src1, IR::Type::U32);
+	const auto opcode = half ? IR::ValueOpcode::FPCmpClass16 : IR::ValueOpcode::FPCmpClass32;
+	EmitCompareResult(inst, IR::U1(ir.Emit(opcode, {value, mask})), false, cmpx);
 }
 
 } // namespace Libs::Graphics::ShaderRecompiler::Frontend
