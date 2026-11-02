@@ -41,6 +41,7 @@ struct FSRManager::Impl {
 	}
 	void Configure(bool enabled) {
 		if (!created || !swapchain) return;
+		if (fg == enabled) return;
 		FfxFrameGenerationConfig cfg {};
 		cfg.swapChain               = swapchain;
 		cfg.frameGenerationEnabled  = enabled;
@@ -313,7 +314,7 @@ bool FSRManager::Evaluate(GraphicContext& g, vk::CommandBuffer cmd, VulkanImage&
 		}
 	}
 	++m->frame;
-	m->Configure(m->swapchain != nullptr && m->history && !guides.camera.reset);
+	m->Configure(m->swapchain != nullptr && m->history);
 	const auto now   = std::chrono::steady_clock::now();
 	float      delta = m->previous == std::chrono::steady_clock::time_point {}
 	                       ? 16.6667f
@@ -385,7 +386,7 @@ bool FSRManager::Evaluate(GraphicContext& g, vk::CommandBuffer cmd, VulkanImage&
 		dispatchResult                  = ffxFsr3UpscalerContextDispatch(&m->upscaler, &upscale);
 	}
 	bool ok = m->Check(dispatchResult, "dispatch upscale");
-	if (ok && m->fg) {
+	if (ok && m->swapchain) {
 		FfxFsr3DispatchFrameGenerationPrepareDescription prepare {};
 		prepare.commandList             = dispatch.commandList;
 		prepare.depth                   = dispatch.depth;
