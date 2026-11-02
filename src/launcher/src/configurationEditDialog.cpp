@@ -685,7 +685,7 @@ void ConfigurationEditDialog::InitGameDirectories() {
 		}
 	});
 
-	m_ui->gridLayout->addWidget(m_game_dirs_group, 1, 0, 1, 1);
+	m_ui->gridLayout->addWidget(m_game_dirs_group, 2, 0, 1, 2);
 	m_game_dirs_group->setVisible(false);
 
 	connect(add_button, &QToolButton::clicked, this, &ConfigurationEditDialog::add_game_directory);

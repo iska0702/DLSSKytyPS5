@@ -1,6 +1,6 @@
 # KytyPS5 (NVIDIA DLSS, Frame Generation & DirectStorage Fork)
 
-[![Version](https://img.shields.io/badge/release-v1.5.5-orange.svg)](https://github.com/iska0702/DLSSKytyPS5/releases/tag/v1.5.5)
+[![Version](https://img.shields.io/badge/release-v1.5.6-orange.svg)](https://github.com/iska0702/DLSSKytyPS5/releases/tag/v1.5.6)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#system-requirements)
 [![Base](https://img.shields.io/badge/upstream-Jetsku%2FKytyPS5%20int21-green.svg)](https://github.com/Jetsku/KytyPS5)
 [![License](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
