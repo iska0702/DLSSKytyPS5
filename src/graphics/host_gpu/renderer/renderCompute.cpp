@@ -59,7 +59,55 @@
 #include <vector>
 
 namespace Libs::Graphics {
-<<<<<<< HEAD
+// KYTY_DISPATCH_OVERLAP accounting, printed every 10 s once a direct dispatch ran:
+//   DispatchOverlap 10s (on|off): <direct> direct dispatches, <pairs> unordered pairs (<pct>%),
+//   <overlapped> overlapped, <indirect> indirect (<empty> empty skipped, KYTY_SKIP_EMPTY_INDIRECT)
+// An unordered pair is a direct dispatch that followed another with nothing in between (it would
+// overlap with the switch on); counted with the switch off too, for sizing.
+static std::atomic<uint64_t> g_overlap_direct {0}, g_overlap_pairs {0}, g_overlap_taken {0},
+    g_overlap_indirect {0}, g_overlap_empty_indirect {0};
+static Live::Switch g_skip_empty_indirect("KYTY_SKIP_EMPTY_INDIRECT", Live::ParseDefaultOn);
+static std::atomic<int64_t> g_overlap_last_print_ns {0};
+
+static void PrintDispatchOverlap(bool enabled) {
+	const auto now = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+	                                          std::chrono::steady_clock::now().time_since_epoch())
+	                                          .count());
+	auto last = g_overlap_last_print_ns.load(std::memory_order_relaxed);
+	if (last == 0) {
+		g_overlap_last_print_ns.store(now, std::memory_order_relaxed);
+		return;
+	}
+	if (now - last < 10'000'000'000ll ||
+	    !g_overlap_last_print_ns.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
+		return;
+	}
+	const auto direct   = g_overlap_direct.exchange(0, std::memory_order_relaxed);
+	const auto pairs    = g_overlap_pairs.exchange(0, std::memory_order_relaxed);
+	const auto taken    = g_overlap_taken.exchange(0, std::memory_order_relaxed);
+	const auto indirect = g_overlap_indirect.exchange(0, std::memory_order_relaxed);
+	const auto empty    = g_overlap_empty_indirect.exchange(0, std::memory_order_relaxed);
+	std::printf("DispatchOverlap 10s (%s): %llu direct dispatches, %llu unordered pairs (%.1f%%), "
+	            "%llu overlapped, %llu indirect (%llu empty skipped)\n",
+	            enabled ? "on" : "off", static_cast<unsigned long long>(direct),
+	            static_cast<unsigned long long>(pairs),
+	            direct != 0 ? 100.0 * static_cast<double>(pairs) / static_cast<double>(direct) : 0.0,
+	            static_cast<unsigned long long>(taken), static_cast<unsigned long long>(indirect),
+	            static_cast<unsigned long long>(empty));
+}
+
+static void CountDispatchOverlap(bool unordered, bool enabled) {
+	g_overlap_direct.fetch_add(1, std::memory_order_relaxed);
+	if (unordered) {
+		g_overlap_pairs.fetch_add(1, std::memory_order_relaxed);
+		if (enabled) {
+			g_overlap_taken.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+	PrintDispatchOverlap(enabled);
+
+}
+
 static std::optional<std::array<float,124>> ReadRRMaterialCamera(RenderContext& context,
         const ShaderStageRuntime& stage) {
 	const auto* enabled=std::getenv("KYTY_RR_MATERIAL_CAPTURE");
@@ -185,54 +233,7 @@ static void FinishRayGuideWrite(CommandBuffer& buffer, const PreparedBindings& b
 	buffer.Handle().pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
 	    vk::PipelineStageFlagBits::eHost|vk::PipelineStageFlagBits::eComputeShader,
 	    {},0,nullptr,1,&barrier,0,nullptr);
-=======
-// KYTY_DISPATCH_OVERLAP accounting, printed every 10 s once a direct dispatch ran:
-//   DispatchOverlap 10s (on|off): <direct> direct dispatches, <pairs> unordered pairs (<pct>%),
-//   <overlapped> overlapped, <indirect> indirect (<empty> empty skipped, KYTY_SKIP_EMPTY_INDIRECT)
-// An unordered pair is a direct dispatch that followed another with nothing in between (it would
-// overlap with the switch on); counted with the switch off too, for sizing.
-static std::atomic<uint64_t> g_overlap_direct {0}, g_overlap_pairs {0}, g_overlap_taken {0},
-    g_overlap_indirect {0}, g_overlap_empty_indirect {0};
-static Live::Switch g_skip_empty_indirect("KYTY_SKIP_EMPTY_INDIRECT", Live::ParseDefaultOn);
-static std::atomic<int64_t> g_overlap_last_print_ns {0};
 
-static void PrintDispatchOverlap(bool enabled) {
-	const auto now = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-	                                          std::chrono::steady_clock::now().time_since_epoch())
-	                                          .count());
-	auto last = g_overlap_last_print_ns.load(std::memory_order_relaxed);
-	if (last == 0) {
-		g_overlap_last_print_ns.store(now, std::memory_order_relaxed);
-		return;
-	}
-	if (now - last < 10'000'000'000ll ||
-	    !g_overlap_last_print_ns.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
-		return;
-	}
-	const auto direct   = g_overlap_direct.exchange(0, std::memory_order_relaxed);
-	const auto pairs    = g_overlap_pairs.exchange(0, std::memory_order_relaxed);
-	const auto taken    = g_overlap_taken.exchange(0, std::memory_order_relaxed);
-	const auto indirect = g_overlap_indirect.exchange(0, std::memory_order_relaxed);
-	const auto empty    = g_overlap_empty_indirect.exchange(0, std::memory_order_relaxed);
-	std::printf("DispatchOverlap 10s (%s): %llu direct dispatches, %llu unordered pairs (%.1f%%), "
-	            "%llu overlapped, %llu indirect (%llu empty skipped)\n",
-	            enabled ? "on" : "off", static_cast<unsigned long long>(direct),
-	            static_cast<unsigned long long>(pairs),
-	            direct != 0 ? 100.0 * static_cast<double>(pairs) / static_cast<double>(direct) : 0.0,
-	            static_cast<unsigned long long>(taken), static_cast<unsigned long long>(indirect),
-	            static_cast<unsigned long long>(empty));
-}
-
-static void CountDispatchOverlap(bool unordered, bool enabled) {
-	g_overlap_direct.fetch_add(1, std::memory_order_relaxed);
-	if (unordered) {
-		g_overlap_pairs.fetch_add(1, std::memory_order_relaxed);
-		if (enabled) {
-			g_overlap_taken.fetch_add(1, std::memory_order_relaxed);
-		}
-	}
-	PrintDispatchOverlap(enabled);
->>>>>>> upstream/main
 }
 
 static bool FillSourcesDisjoint(std::span<const ShaderRecompiler::IR::DescriptorValue> sources,
@@ -704,6 +705,7 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 	// transitions and dependencies are batched); the dispatch goes through Sink(), which records
 	// them first as one barrier, exactly as Handle() did.
 	buffer.BeginEmission();
+	PrepareRayGuideBinding(m_context, buffer, bindings, program);
 	CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
 	               std::span {&descriptor_stage, 1u});
 	bool has_storage_writes = bindings.shared_memory.buffer != nullptr ||
@@ -788,89 +790,12 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 			     static_cast<int32_t>(r.LodBias()));
 		}
 	}
-<<<<<<< HEAD
-
-	if (use_thread_dimensions) {
-		auto groups_from_threads = [](uint32_t threads, uint32_t group_size) {
-			return (threads == 0
-			            ? 0u
-			            : (threads + std::max(group_size, 1u) - 1u) / std::max(group_size, 1u));
-		};
-
-		const uint32_t old_x = thread_group_x;
-		const uint32_t old_y = thread_group_y;
-		const uint32_t old_z = thread_group_z;
-		thread_group_x       = groups_from_threads(thread_group_x, cs_regs.cs_regs.num_thread_x);
-		thread_group_y       = groups_from_threads(thread_group_y, cs_regs.cs_regs.num_thread_y);
-		thread_group_z       = groups_from_threads(thread_group_z, cs_regs.cs_regs.num_thread_z);
-
-		static std::atomic<uint32_t> log_count {0};
-		if (log_count.fetch_add(1, std::memory_order_relaxed) < 32) {
-			LOGF("GraphicsRenderDispatchDirect: use-thread-dimensions %ux%ux%u / %ux%ux%u -> "
-			     "groups %ux%ux%u\n",
-			     old_x, old_y, old_z, std::max(cs_regs.cs_regs.num_thread_x, 1u),
-			     std::max(cs_regs.cs_regs.num_thread_y, 1u),
-			     std::max(cs_regs.cs_regs.num_thread_z, 1u), thread_group_x, thread_group_y,
-			     thread_group_z);
-		}
-	}
-
-	buffer.EndRendering();
-	auto& pipeline =
-	    m_context.GetPipelineCache().GetComputePipeline(input_info, compute_program);
-	auto& bindings = m_compute_bindings;
-	PrepareBindings(input_info.stage, bindings);
-	// The native dispatch size bounds workgroup ids for write-range proofs.
-	bindings.dispatch_groups     = {thread_group_x, thread_group_y, thread_group_z};
-	bindings.has_dispatch_groups = true;
-	FindBuffers(bindings);
-	if (program.info.uses_dma) {
-		m_context.PrepareBda();
-	}
-	if (program.info.uses_bvh) {
-		Profiler::CountFrameEvent(Profiler::FrameEvent::RtStubDispatches);
-	}
-	if (program.info.bda_writes) {
-		// KYTY_BDA_WRITES: settled synchronously right after the dispatch below. The settle relies
-		// on PrepareBda's pass above having uploaded every CPU-dirty page first.
-		EXIT_IF(!program.info.uses_dma);
-		m_context.GetBufferCache().PrepareBdaWrites();
-	}
-	RebindImages(bindings);
-	RebindBuffers(bindings);
-
-	PreparedBindings* descriptor_stage = &bindings;
-	// Emission safe point (KYTY_CP_RECORDER, render.h): no native handle from the preparation above
-	// is alive. Binding commits and the barrier requests below record state commands only (image
-	// transitions and dependencies are batched); the dispatch goes through Sink(), which records
-	// them first as one barrier, exactly as Handle() did.
-	buffer.BeginEmission();
-	PrepareRayGuideBinding(m_context,buffer,bindings,program);
-	CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
-	               std::span {&descriptor_stage, 1u});
-	bool has_storage_writes = HasShaderBufferWrites(input_info.stage) || program.info.bda_writes;
-	has_storage_writes =
-	    std::any_of(program.info.images.begin(), program.info.images.end(),
-	                [](const auto& image) {
-		                return image.written &&
-		                       image.resource_class ==
-		                           ShaderRecompiler::IR::ImageResourceClass::Storage;
-	                }) ||
-	    has_storage_writes;
-	if (has_storage_writes) {
-		// A host fence used to serialize every dispatch. Preserve its read-before-write ordering
-		// while allowing the queue to execute asynchronously.
-		ShaderWriteHazardBarrier(buffer, vk::PipelineStageFlagBits::eComputeShader);
-	}
 	buffer.BindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline);
 	const auto rr_trace = Config::DLSSDiagnosticsEnabled() && m_context.HasGpu()
 	    ? RRGuestTrace::Begin(m_context.GetGpu().GetFrameNum(), "compute", program.shader_hash) : 0;
 	RRGuestTrace::Stage(rr_trace, "CS", program, resources, &bindings);
 	RRGuestTrace::End(rr_trace);
-	buffer.Sink().dispatch(thread_group_x, thread_group_y, thread_group_z);
-	FinishRayGuideWrite(buffer,bindings);
-=======
-	buffer.BindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline);
+
 	constexpr uint32_t DispatchInitiatorOrderedAppendEnable = 1u << 3u;
 	const uint64_t     group_threads = uint64_t {std::max(input_info.threads_num[0], 1u)} *
 	                               std::max(input_info.threads_num[1], 1u) *
@@ -897,8 +822,8 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 	} else {
 		buffer.Sink().dispatch(thread_group_x, thread_group_y, thread_group_z);
 	}
+	FinishRayGuideWrite(buffer, bindings);
 	Common::DebugCounters::Add(Common::DebugCounters::Counter::Dispatches);
->>>>>>> upstream/main
 
 	// The removed host fence also ordered read-only dispatches before later writers.
 	ShaderAccessBarrier(buffer, vk::PipelineStageFlagBits::eComputeShader);
