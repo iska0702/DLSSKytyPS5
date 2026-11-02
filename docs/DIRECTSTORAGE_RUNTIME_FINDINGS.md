@@ -1,5 +1,10 @@
 # DirectStorage and Astro crash investigation (2026-10-12)
 
+This is the historical synchronous-path investigation. The subsequent asynchronous APR/pread,
+mapped Vulkan texture sources and the 2026-10-16 PLAYROOM startup check are documented in
+[the current streaming report](../README_DIRECTSTORAGE.md). The GPU-path limitation below
+describes the older build; PS5 archive GPU decompression is still unimplemented.
+
 ## User crash
 
 The independent user run (PID 8076) terminated after 103 seconds / 3174 flips.

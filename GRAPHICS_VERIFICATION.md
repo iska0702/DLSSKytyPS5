@@ -33,7 +33,9 @@ Resolution patch correction: the preceding 1920×1080 results predate the lookup
 
 The corresponding DLSS game run also evaluates 1708×960 → 2560×1440 (`build/astrobot-resolution-dlss-final.log`). The title reports `DLSS: Active (Quality 1708x960->2560x1440)`. FG presentation depends separately on foreground focus; it does not determine the internal render resolution.
 
-DirectStorage currently accelerates the implemented APR host-file-read path. GPU texture streaming and GPU decompression are not integrated. The cached ReadFile comparison was faster in this test, so no storage speedup is claimed.
+The v1.5.0 DirectStorage measurement above covers the original APR host-file-read path. Its cached ReadFile comparison was faster, so it establishes no speedup. The later local [asset streaming implementation](README_DIRECTSTORAGE.md) adds asynchronous APR/pread and verified mapped Vulkan texture sources; PS5 archive GPU decompression remains unimplemented.
+
+The final local streaming regression set passed 16 selected tests (two memory-reservation failures with the game running passed on retry after exit). The separate Vulkan storage/image smoke matched 65,536 reference bytes, and 16 file-backed GPU-detile cases matched CPU output. DirectStorage now enables the existing frame-aged VRAM budget collector unless explicitly overridden. ASTRO BOT at `D:\Eboot\PPSA21567` logged 26,624 successful reads with zero storage errors in the budget-policy run; diagnostics recorded 1,262 images / 3,996.8 MiB cumulatively retired. This verifies active I/O and memory reclamation, not a measured improvement in transition frame times.
 
 The 1080p DLSS-G device loss remains an open issue. The successful 720p test is a short smoke test, not a long-session stability result. Its log is `build/dlss-final-audit.log`; the failed corrected 1080p run is `build/dlss-1080p-corrected.log` plus `.err`.
 

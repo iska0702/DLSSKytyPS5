@@ -7,6 +7,7 @@
 #include "common/liveSwitch.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
+#include "graphics/directstorage/directStorageManager.h"
 #include "graphics/guest_gpu/gpu_format.h"
 #include "graphics/guest_gpu/graphicsRun.h"
 #include "graphics/guest_gpu/tile.h"
@@ -2626,6 +2627,21 @@ bool TextureCache::TryAsyncFullUpload(Image& image) {
 		return false;
 	}
 	RestrictToResidentLevels(image, transfer);
+	if (Config::DirectStorageEnabled()) {
+		auto source = DirectStorageIntegration::DirectStorageManager::Instance().FindTextureSource(base, size);
+		if (source.buffer) {
+			if (!m_tiler.DetileToImage(image, source.buffer, source.offset, size, transfer.LinearSize(),
+			                          transfer.tiles, transfer.regions)) {
+				const auto linear = m_tiler.Detile(source.buffer, source.offset, size,
+				                                   transfer.LinearSize(), transfer.tiles);
+				for (auto& region : transfer.regions) region.bufferOffset += linear.offset;
+				image.Upload(transfer.regions, linear.buffer, linear.offset, linear.size);
+			}
+			// Retiring/publishing another file range cannot free a buffer still used by the GPU.
+			m_scheduler.DeferOperation([owner = std::move(source.owner)] {});
+			return true;
+		}
+	}
 	auto& staging         = StagingRing();
 	auto [mapped, offset] = staging.Map(size, 256);
 	if (mapped == nullptr) {

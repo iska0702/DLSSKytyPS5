@@ -1485,7 +1485,12 @@ void RuntimeLinker::Execute(const std::filesystem::path& game_patch) {
 	if (!game_patch.empty()) {
 		if (!GamePatch::Apply(game_patch, m_programs.empty() ? nullptr : m_programs.front(),
 		                      m_programs)) {
-			EXIT("Failed to apply game cheat\n");
+			const char* ignore_cheat_err = std::getenv("KYTY_IGNORE_CHEAT_ERROR");
+			if (ignore_cheat_err != nullptr && std::strcmp(ignore_cheat_err, "0") != 0) {
+				Log::WriteToConsoleAndLog("Game patch: [Warning] Failed to apply game cheat, continuing due to KYTY_IGNORE_CHEAT_ERROR=1\n");
+			} else {
+				EXIT("Failed to apply game cheat\n");
+			}
 		}
 	}
 	if (libc != nullptr && libc->dynamic_info->init_vaddr != 0) {

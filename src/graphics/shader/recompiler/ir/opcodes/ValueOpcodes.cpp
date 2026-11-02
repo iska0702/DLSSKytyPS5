@@ -88,6 +88,7 @@ bool HasSideEffects(ValueOpcode opcode) {
 		return true;
 	}
 	switch (opcode) {
+		case ValueOpcode::StoreRayGuide: return true;
 		case ValueOpcode::Reference:
 		case ValueOpcode::ReferenceU32:
 		case ValueOpcode::SetAttribute:

@@ -1096,11 +1096,12 @@ void CheckSocketWakeup() {
 
 } // namespace
 
-int main(int, char**) {
+int main(int argc, char** argv) {
   Common::InitializeThreads();
   Common::Subsystems subsystems;
   subsystems.Initialize<Config::Lifecycle>();
   Config::ConfigOptions options;
+  options.directstorage_enabled = argc > 1 && std::strcmp(argv[1], "--directstorage") == 0;
   options.printf_direction = Config::LogDirection::Silent;
   Config::Load(options);
   subsystems.Initialize<Log::Lifecycle>();

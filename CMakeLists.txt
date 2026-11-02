@@ -448,6 +448,7 @@ set(gpu_blit_shader_sources
 	"${gpu_tiler_shader_dir}/gpu_video_out_cas.frag"
 	"${gpu_tiler_shader_dir}/gpu_dlss_astro_motion.frag"
 	"${gpu_tiler_shader_dir}/gpu_dlss_depth.frag"
+	"${gpu_tiler_shader_dir}/gpu_rr_playroom_materials.comp"
 )
 foreach(shader_source IN LISTS gpu_blit_shader_sources)
 	get_filename_component(shader_name "${shader_source}" NAME_WE)
@@ -1072,6 +1073,9 @@ add_kyty_full_emulator_test(virtual_memory_allocation_tests "${KYTY_TESTS_DIR}/V
 add_kyty_full_emulator_test(repeat_trace_tests "${KYTY_TESTS_DIR}/RepeatTraceTests.cpp")
 add_kyty_full_emulator_test(directstorage_tests "${KYTY_TESTS_DIR}/DirectStorageTests.cpp")
 target_sources(directstorage_tests PRIVATE "${KYTY_TESTS_DIR}/DlssVulkanTests.cpp")
+target_sources(directstorage_tests PRIVATE "${KYTY_TESTS_DIR}/RRReflectionVulkanTests.cpp")
+target_sources(directstorage_tests PRIVATE "${KYTY_TESTS_DIR}/RRMaterialVulkanTests.cpp")
+target_sources(directstorage_tests PRIVATE "${KYTY_TESTS_DIR}/DirectStorageVulkanTests.cpp")
 target_compile_definitions(virtual_memory_allocation_tests PRIVATE
 	KYTY_VIRTUAL_MEMORY_ALLOCATION_TESTS=1)
 
@@ -1202,6 +1206,9 @@ if(BUILD_TESTING)
 	add_test(NAME event_queue_semantics COMMAND $<TARGET_FILE:event_queue_semantics_tests>)
 	add_test(NAME thread_service COMMAND $<TARGET_FILE:thread_service_tests>)
 	add_test(NAME kernel_file_system COMMAND $<TARGET_FILE:kernel_file_system_tests>)
+	if(WIN32)
+		add_test(NAME kernel_file_system_directstorage COMMAND $<TARGET_FILE:kernel_file_system_tests> --directstorage)
+	endif()
 	add_test(NAME sync_on_address COMMAND $<TARGET_FILE:sync_on_address_tests>)
 	add_test(NAME audio_out2_port COMMAND $<TARGET_FILE:audio_out2_port_tests>)
 	add_test(NAME audio_diag COMMAND $<TARGET_FILE:audio_diag_tests>)
@@ -1287,6 +1294,10 @@ if(BUILD_TESTING)
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --context-state-only)
 	add_test(NAME gpu_tiler
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --gpu-tiler-only)
+	if(WIN32)
+		add_test(NAME gpu_tiler_directstorage
+			COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --gpu-tiler-directstorage-only)
+	endif()
 	add_test(NAME tile_layout
 		COMMAND $<TARGET_FILE:shader_recompiler_compute_tests> --tile-layout-only)
 

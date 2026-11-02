@@ -1,4 +1,6 @@
 #include "graphics/host_gpu/renderer/renderContext.h"
+#include "graphics/host_gpu/renderer/rrReflectionCapture.h"
+#include "graphics/presentation/dlss/rrPlayroomMaterials.h"
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -57,6 +59,8 @@ RenderContext::RenderContext(GraphicContext& graphics)
 RenderContext::~RenderContext() {
 	ShutdownGpu();
 	m_command_scheduler.Shutdown();
+	rr_reflection_capture.reset();
+	rr_playroom_materials.reset();
 }
 
 void RenderContext::InitializeGpu(VideoOut::VideoOutDriver* video_out) {

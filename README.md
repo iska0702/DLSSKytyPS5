@@ -32,7 +32,7 @@ KytyPS5 is a PlayStation 5 emulator written in C++. This fork builds upon the ex
 - Corrected camera history, jitter sign and units, and depth-based motion for static surfaces. Unsupported logo/menu frames bypass DLSS and MFG.
 - Added native QHD rendering with DLAA through `Run_Astro_DLAA_Native.cmd`, with automatic native resolution profiles. This preserves UI render resolution at a higher GPU cost.
 - Zero sharpness now disables the CAS pass. DLSS feature support, history resets and evaluation failures are handled more accurately.
-- DirectStorage APR file reads use bounded CPU staging before copying into protected guest memory, with checked completion and standard-read fallback. Hardware integrity and EOF tests pass; actual game loading completed over 5,000 requests without recorded errors. GPU streaming/decompression are not integrated, and a loading speedup is not established.
+- DirectStorage asset streaming overlaps bounded APR reads with guest processing and supports read-only `pread`. Eligible unchanged texture ranges can reuse mapped Vulkan sources for GPU detiling; modified/decoded data keeps the normal upload path. Integrity, lifetime and GPU readback tests pass. Transition speedups still require gameplay verification. See [streaming details](README_DIRECTSTORAGE.md).
 - Astro's experimental gameplay clock override is disabled by default. A reported windy-slope crash was a `!pos.IsNan()` physics assertion; restoring stock timing is a mitigation, not a confirmed fix for its origin.
 - Unhandled guest faults preserve original registers, code bytes and call chains in `_HangTrace/guest-fault-*.txt`.
 
@@ -82,9 +82,9 @@ Sharpening can improve perceived clarity, but excessive sharpening may introduce
 
 ### DirectStorage and Vulkan
 
-DirectStorage is connected to the APR host file-read path. Data is read into a bounded CPU staging buffer and then copied into guest memory on the emulator thread. A standard file-read fallback handles unavailable DirectStorage or failed requests.
+DirectStorage is connected to APR and read-only kernel `pread`. Bounded asynchronous tickets overlap host reads with guest processing, while guest writes and completion events preserve game command order. A standard file-read fallback handles unavailable DirectStorage or failed requests.
 
-The shared D3D12/Vulkan texture helper has no renderer callers. GPU texture streaming and GPU decompression are not integrated. The launcher option is named **DirectStorage File I/O (Experimental)**.
+For eligible unchanged file-backed texture bytes, DirectStorage writes into mapped Vulkan staging that the renderer can consume through its GPU tiler. This uses the DirectStorage memory destination; PS5 archive GPU decompression is not implemented. The separate shared D3D12 texture helper remains unused. The launcher option is **DirectStorage Asset Streaming (Experimental)**. See [implementation and verification](README_DIRECTSTORAGE.md).
 
 Tests confirm correct file contents and EOF handling. The synchronous implementation has not demonstrated faster loading than ordinary file reads.
 

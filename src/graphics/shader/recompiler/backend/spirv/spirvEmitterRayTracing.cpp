@@ -718,4 +718,66 @@ uint32_t EmitBvhIntersectRayStub(EmitterState& state, uint32_t node_lo) {
 	return result;
 }
 
+void EmitStoreRayGuide(ValueEmitContext& ctx, const IR::Inst& inst) {
+	auto& s = ctx.state;
+	if (s.ray_guide_variable == 0) ctx.Fail(inst, "missing dedicated ray-guide binding");
+	if (!inst.Arg(4).IsImmediate() || inst.Arg(4).U32()>1)
+		ctx.Fail(inst, "invalid ray-guide export mode");
+	const auto pointer = [&](uint32_t index) {
+		const auto p = s.builder.AllocateId();
+		s.builder.AddFunction(spv::OpAccessChain, TypeStorageBufferElementPointer(s), p,
+		    s.ray_guide_variable, ConstantU32(s, 0), index);
+		return p;
+	};
+	const auto load = [&](uint32_t index) {
+		const auto value = s.builder.AllocateId();
+		s.builder.AddFunction(spv::OpLoad, TypeU32(s), value, pointer(ConstantU32(s, index)));
+		return value;
+	};
+	const auto width = load(0), height = load(1);
+	const auto x = ctx.Arg(inst, 2), y = ctx.Arg(inst, 3);
+	const auto in_x = Binary(s, spv::OpULessThan, TypeBool(s), x, width);
+	const auto in_y = Binary(s, spv::OpULessThan, TypeBool(s), y, height);
+	const auto small_w = Binary(s, spv::OpULessThanEqual, TypeBool(s), width, ConstantU32(s, 16384));
+	const auto small_h = Binary(s, spv::OpULessThanEqual, TypeBool(s), height, ConstantU32(s, 16384));
+	auto active = Binary(s, spv::OpLogicalAnd, TypeBool(s), in_x, in_y);
+	active = Binary(s, spv::OpLogicalAnd, TypeBool(s), active, small_w);
+	active = Binary(s, spv::OpLogicalAnd, TypeBool(s), active, small_h);
+	active = Binary(s, spv::OpLogicalAnd, TypeBool(s), active, ctx.Arg(inst, 5));
+	const auto pixel = Binary(s, spv::OpIAdd, TypeU32(s),
+	    Binary(s, spv::OpIMul, TypeU32(s), y, width), x);
+	const auto offset = Binary(s, spv::OpIAdd, TypeU32(s), ConstantU32(s, 4),
+	    Binary(s, spv::OpIMul, TypeU32(s), pixel, ConstantU32(s, 4)));
+	const auto length = s.builder.AllocateId();
+	s.builder.AddFunction(spv::OpArrayLength, TypeU32(s), length, s.ray_guide_variable, 0u);
+	const auto marker_offset = Binary(s, spv::OpIAdd, TypeU32(s), offset, ConstantU32(s, 2));
+	const auto last = Binary(s, spv::OpIAdd, TypeU32(s), offset, ConstantU32(s, 3));
+	active = Binary(s, spv::OpLogicalAnd, TypeBool(s), active,
+	    Binary(s, spv::OpULessThan, TypeBool(s), last, length));
+	const auto distance = ctx.Arg(inst, 0), hit = ctx.Arg(inst, 1);
+	const bool coverage_only = inst.Arg(4).U32() == 1;
+	EmitIfCondition(s, active, [&] {
+		if (coverage_only) {
+			// A shader can write lighting without executing its ray branch. Mark
+			// coverage separately; never turn such pixels into fabricated misses.
+			const auto marker = s.builder.AllocateId();
+			s.builder.AddFunction(spv::OpLoad, TypeU32(s), marker, pointer(marker_offset));
+			EmitIfCondition(s, Binary(s, spv::OpIEqual, TypeBool(s), marker, ConstantU32(s, 0)), [&] {
+				s.builder.AddFunction(spv::OpStore, pointer(marker_offset), ConstantU32(s, 2));
+			});
+			return;
+		}
+		s.builder.AddFunction(spv::OpStore, pointer(offset), distance);
+		s.builder.AddFunction(spv::OpStore,
+		    pointer(Binary(s, spv::OpIAdd, TypeU32(s), offset, ConstantU32(s, 1))), hit);
+		s.builder.AddFunction(spv::OpStore, pointer(marker_offset), ConstantU32(s, 1));
+		// A pixel can execute this point repeatedly inside the guest's probe
+		// loop. The last parameter alone is not a unique reflection guide.
+		const auto previous_count = s.builder.AllocateId();
+		s.builder.AddFunction(spv::OpAtomicIAdd, TypeU32(s), previous_count, pointer(last),
+		    ConstantU32(s, static_cast<uint32_t>(spv::ScopeDevice)),
+		    ConstantU32(s, static_cast<uint32_t>(spv::MemorySemanticsMaskNone)), ConstantU32(s, 1));
+	});
+}
+
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter

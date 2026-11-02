@@ -207,6 +207,9 @@ struct CodegenOptions {
 	// [2^k, 2^(k+1)), at end - RtNodeStatsGdsFromEnd - k), reported at flips. A diagnostic for the
 	// budget.
 	bool rt_node_stats = false;
+	// Opt-in raw ray-parameter capture for verified PLAYROOM lighting shaders.
+	// This does not certify RR inputs or enable game RR evaluation.
+	bool rr_guide_capture = false;
 };
 
 // GDS dwords, counted from the end of GDS, that KYTY_RT_NODE_BUDGET and KYTY_RT_NODE_STATS report

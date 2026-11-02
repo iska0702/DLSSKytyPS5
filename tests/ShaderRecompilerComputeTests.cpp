@@ -41,6 +41,7 @@
 #include "graphics/host_gpu/renderer/image/imageView.h"
 #include "graphics/host_gpu/renderer/image/textureCommon.h"
 #include "graphics/host_gpu/renderer/image/tiler.h"
+#include "graphics/directstorage/directStorageManager.h"
 #include "graphics/host_gpu/renderer/meshIndirect.h"
 #include "graphics/host_gpu/renderer/pipeline/descriptors.h"
 #include "graphics/host_gpu/renderer/pipeline/pipelineCache.h"
@@ -26590,9 +26591,32 @@ public:
     return pixels;
   }
 
-  void CheckGpuTilerCpuParity() {
+  void CheckGpuTilerCpuParity(bool file_streaming = false) {
     constexpr const char *name = "GpuTilerCpuParity";
     EnsureRuntimeContext();
+
+    using Storage = Libs::Graphics::DirectStorageIntegration::DirectStorageManager;
+    using StorageRead = Libs::Graphics::DirectStorageIntegration::DirectStorageRead;
+    struct StreamingScope {
+      bool enabled;
+      bool previous;
+      std::vector<std::filesystem::path> paths;
+      ~StreamingScope() {
+        if (!enabled) return;
+        Storage::Instance().Shutdown();
+        Config::SetDirectStorageEnabled(previous);
+        for (const auto& path : paths) {
+          std::error_code error;
+          std::filesystem::remove(path, error);
+        }
+      }
+    } streaming_scope {file_streaming, Config::DirectStorageEnabled(), {}};
+    uint32_t storage_cases = 0;
+    if (file_streaming) {
+      Config::SetDirectStorageEnabled(true);
+      Require(name, "DirectStorage initialization", Storage::Instance().Initialize(&m_runtime_context),
+              "file-to-Vulkan streaming backend is unavailable");
+    }
 
     CommandScheduler scheduler(Renderer(), m_runtime_context,
                                CommandScheduler::Role::Guest);
@@ -26660,7 +26684,26 @@ public:
               name, padded_linear, AllFlags,
               std::vector<u32>(static_cast<size_t>(padded_linear / sizeof(u32)),
                                0xabababab));
-          const auto result = tile_manager.Detile(input.buffer, 0, padded_tiled,
+          std::shared_ptr<StorageRead> file_source;
+          vk::Buffer tiled_source = input.buffer;
+          if (file_streaming && storage_cases < 16 && padded_tiled >= 65536 && padded_tiled <= 8 * 1024 * 1024) {
+            const auto path = std::filesystem::temp_directory_path() /
+                ("kyty-dstorage-tiler-" + std::to_string(reinterpret_cast<uintptr_t>(this)) +
+                 "-" + std::to_string(storage_cases) + ".bin");
+            streaming_scope.paths.push_back(path);
+            const auto words = to_dwords(tiled, padded_tiled);
+            {
+              std::ofstream file(path, std::ios::binary | std::ios::trunc);
+              file.write(reinterpret_cast<const char*>(words.data()), static_cast<std::streamsize>(padded_tiled));
+              Require(name, "streaming fixture", bool(file), "could not write the tiled file fixture");
+            }
+            file_source = Storage::Instance().EnqueueFileRead(path, 0, padded_tiled);
+            Require(name, "streaming source", file_source && file_source->Wait() && file_source->NativeBuffer(),
+                    "DirectStorage did not produce a mapped Vulkan source");
+            tiled_source = file_source->NativeBuffer();
+            ++storage_cases;
+          }
+          const auto result = tile_manager.Detile(tiled_source, 0, padded_tiled,
                                                   padded_linear, infos);
           const vk::BufferCopy copy{result.offset, 0, padded_linear};
           scheduler.Current().Handle().copyBuffer(result.buffer, output.buffer,
@@ -27722,6 +27765,11 @@ public:
     DestroyBuffer(&volume_upload);
     std::printf("[gpu]     %-32s ok (%u cases, %u format/mode pairs)\n", name,
                 case_index, format_cases);
+    if (file_streaming) {
+      Require(name, "native storage coverage", storage_cases == 16,
+              "insufficient file-backed GPU detile coverage");
+      std::printf("[gpu] DirectStorage file -> Vulkan GPU detile -> CPU reference: %u cases PASS\n", storage_cases);
+    }
   }
 
   // KYTY_TILER_IMAGE_DIRECT: TileManager::DetileToImage / TileFromImage must leave exactly the
@@ -28555,11 +28603,11 @@ private:
       m_runtime_context.transfer_queue_family = m_transfer_family;
       m_runtime_context.transfer_queue = m_transfer_queue;
     }
-    m_runtime_context.attachment_feedback_loop_enabled = true;
-    m_runtime_context.provoking_vertex_last_enabled = true;
-    // The harness device requires and enables both (production rasterization features).
-    m_runtime_context.color_write_enable_enabled = true;
-    m_runtime_context.depth_clip_enable_enabled = true;
+    m_runtime_context.attachment_feedback_loop_enabled = m_feedback_loop_supported;
+    m_runtime_context.provoking_vertex_last_enabled = m_provoking_vertex_supported;
+    // Match the production device's optional-feature fallbacks.
+    m_runtime_context.color_write_enable_enabled = m_color_write_supported;
+    m_runtime_context.depth_clip_enable_enabled = m_depth_clip_supported;
     m_runtime_context.storage_image_read_without_format_enabled =
         m_storage_image_read_without_format;
     m_runtime_context.sampler_filter_minmax_enabled = m_sampler_filter_minmax;
@@ -28687,6 +28735,13 @@ private:
                                                   physical_devices.data()),
               "vkEnumeratePhysicalDevices");
 
+    // As on a normal hybrid-GPU emulator launch, prefer the discrete adapter. The
+    // enumeration order can otherwise select the laptop iGPU for all renderer tests.
+    std::stable_sort(physical_devices.begin(), physical_devices.end(), [](auto a, auto b) {
+      return (a.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu) >
+             (b.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu);
+    });
+
     for (auto physical : physical_devices) {
       u32 queue_count = 0;
       physical.getQueueFamilyProperties(&queue_count, nullptr);
@@ -28732,6 +28787,8 @@ private:
     Require("VulkanHarness", "dispatch", m_physical_device != nullptr,
             "no Vulkan graphics+compute device with fragment barycentrics and 64-bit LDS/image atomics");
     m_physical_device.getMemoryProperties(&m_memory_properties);
+
+    std::printf("[gpu] VulkanHarness: %s\n", m_physical_device.getProperties().deviceName.data());
 
     vk::PhysicalDeviceFeatures available_features{};
     m_physical_device.getFeatures(&available_features);
@@ -28830,13 +28887,13 @@ private:
     Require("VulkanHarness", "graphics", available_features12.shaderOutputLayer == true,
             "vertex layer output is not supported");
     Require("VulkanHarness", "graphics", available_features.fillModeNonSolid &&
-                available_features.tessellationShader &&
-                available_depth_clip.depthClipEnable && available_clip_control.depthClipControl &&
-                available_color_write.colorWriteEnable &&
-                available_feedback_layout.attachmentFeedbackLoopLayout &&
-                available_feedback_dynamic.attachmentFeedbackLoopDynamicState &&
-                available_provoking_vertex.provokingVertexLast,
+                available_features.tessellationShader && available_clip_control.depthClipControl,
             "production rasterization features are not supported");
+    m_feedback_loop_supported = available_feedback_layout.attachmentFeedbackLoopLayout &&
+                               available_feedback_dynamic.attachmentFeedbackLoopDynamicState;
+    m_provoking_vertex_supported = available_provoking_vertex.provokingVertexLast;
+    m_color_write_supported = available_color_write.colorWriteEnable;
+    m_depth_clip_supported = available_depth_clip.depthClipEnable;
 
     float priority = 1.0f;
     std::array<vk::DeviceQueueCreateInfo, 2> queue_infos{};
@@ -28907,24 +28964,24 @@ private:
     derivatives.computeDerivativeGroupQuads = true;
     vk::PhysicalDeviceDepthClipEnableFeaturesEXT depth_clip{};
     depth_clip.pNext = &derivatives;
-    depth_clip.depthClipEnable = true;
+    depth_clip.depthClipEnable = m_depth_clip_supported;
     vk::PhysicalDeviceDepthClipControlFeaturesEXT clip_control{};
-    clip_control.pNext = &depth_clip;
+    clip_control.pNext = m_depth_clip_supported ? static_cast<void*>(&depth_clip) : static_cast<void*>(&derivatives);
     clip_control.depthClipControl = true;
     vk::PhysicalDeviceColorWriteEnableFeaturesEXT color_write{};
     color_write.pNext = &clip_control;
-    color_write.colorWriteEnable = true;
+    color_write.colorWriteEnable = m_color_write_supported;
     vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT feedback_layout{};
-    feedback_layout.pNext = &color_write;
-    feedback_layout.attachmentFeedbackLoopLayout = true;
+    feedback_layout.pNext = m_color_write_supported ? static_cast<void*>(&color_write) : static_cast<void*>(&clip_control);
+    feedback_layout.attachmentFeedbackLoopLayout = m_feedback_loop_supported;
     vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT feedback_dynamic{};
     feedback_dynamic.pNext = &feedback_layout;
-    feedback_dynamic.attachmentFeedbackLoopDynamicState = true;
+    feedback_dynamic.attachmentFeedbackLoopDynamicState = m_feedback_loop_supported;
     vk::PhysicalDeviceProvokingVertexFeaturesEXT provoking_vertex{};
-    provoking_vertex.pNext = &feedback_dynamic;
+    provoking_vertex.pNext = m_feedback_loop_supported ? static_cast<void*>(&feedback_dynamic) : feedback_layout.pNext;
     provoking_vertex.provokingVertexLast = available_provoking_vertex.provokingVertexLast;
     vk::PhysicalDeviceImageViewMinLodFeaturesEXT min_lod{};
-    min_lod.pNext = &provoking_vertex;
+    min_lod.pNext = m_provoking_vertex_supported ? static_cast<void*>(&provoking_vertex) : provoking_vertex.pNext;
     min_lod.minLod = true;
     device_info.pNext = &min_lod;
     // Like the emulator's device: robustBufferAccess2 when available, so shaders may leave plain
@@ -28984,15 +29041,17 @@ private:
         VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
         VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
         VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME,
-        VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME,
         VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME,
-        VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME,
-        VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME,
-        VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME,
-        VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME,
         VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME,
         VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME,
         VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME};
+    if (m_depth_clip_supported) device_extensions.push_back(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
+    if (m_color_write_supported) device_extensions.push_back(VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME);
+    if (m_provoking_vertex_supported) device_extensions.push_back(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
+    if (m_feedback_loop_supported) {
+      device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
+      device_extensions.push_back(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_DYNAMIC_STATE_EXTENSION_NAME);
+    }
     if (robustness2_supported) {
       device_extensions.push_back(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
     }
@@ -29423,6 +29482,10 @@ private:
   GraphicContext m_runtime_context{};
   bool m_pipeline_library = false;
   bool m_storage_image_read_without_format = false;
+  bool m_feedback_loop_supported = false;
+  bool m_provoking_vertex_supported = false;
+  bool m_color_write_supported = false;
+  bool m_depth_clip_supported = false;
   bool m_sampler_filter_minmax = false;
   // Enabled on the device when supported; the runtime context reports them only inside
   // MeshShaderScope, so every other check keeps the context it always had.
@@ -48374,6 +48437,8 @@ void CheckNativeImageDescriptorTypes() {
               NativeDescriptorType(DescriptorBindingKind::FlattenedSrt) ==
                   vk::DescriptorType::eStorageBuffer &&
               NativeDescriptorType(DescriptorBindingKind::ShaderData) ==
+                  vk::DescriptorType::eStorageBuffer &&
+              NativeDescriptorType(DescriptorBindingKind::RayGuide) ==
                   vk::DescriptorType::eStorageBuffer,
           "non-image binding has the wrong Vulkan descriptor type");
   std::printf("[host]    %-32s ok\n", "NativeImageDescriptorTypes");
@@ -51656,6 +51721,15 @@ int main(int argc, char **argv) {
     vulkan.CheckTilerImageDirect();
     return 0;
   }
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+  if (argc == 2 && std::strcmp(argv[1], "--gpu-tiler-directstorage-only") == 0) {
+    CheckTileBlockBijection();
+    CheckDetileCopyCoverage();
+    VulkanHarness vulkan;
+    vulkan.CheckGpuTilerCpuParity(true);
+    return 0;
+  }
+#endif
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
   if (argc == 2 && std::strcmp(argv[1], "--depth-feedback-keep-only") == 0) {
     VulkanHarness vulkan;

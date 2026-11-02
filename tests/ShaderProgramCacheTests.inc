@@ -222,6 +222,7 @@ void CheckFingerprint() {
   options_differ("dispatcher_cap", [](CodegenOptions &o) { o.dispatcher_cap++; });
   options_differ("ir_linear_uses", [](CodegenOptions &o) { o.ir_linear_uses = !o.ir_linear_uses; });
   options_differ("fold_lane_masks", [](CodegenOptions &o) { o.fold_lane_masks = !o.fold_lane_masks; });
+  options_differ("rr_guide_capture", [](CodegenOptions &o) { o.rr_guide_capture = !o.rr_guide_capture; });
 
   // Host state the emitter reads.
   namespace Spirv = ShaderRecompiler::Spirv;

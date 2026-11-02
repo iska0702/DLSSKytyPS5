@@ -33,6 +33,18 @@ int main() {
 	texture(in.specular_hit_distance, vk::Format::eR16Sfloat);
 	texture(in.output_hdr, vk::Format::eR16G16B16A16Sfloat, true);
 	check(DLSSRayReconstruction::Validate(in).empty(), "complete HDR lighting contract accepted");
+	auto reflected = in;
+	reflected.specular_hit_distance = {};
+	texture(reflected.specular_motion, vk::Format::eR16G16Sfloat);
+	check(DLSSRayReconstruction::Validate(reflected).empty(), "reflected-geometry motion accepted without hit distance");
+	auto invalid_reflected = reflected; invalid_reflected.specular_motion = {};
+	check(!DLSSRayReconstruction::Validate(invalid_reflected).empty(), "primary-surface motion alone cannot replace reflection guide");
+	invalid_reflected = reflected; invalid_reflected.specular_hit_distance = in.specular_hit_distance;
+	check(!DLSSRayReconstruction::Validate(invalid_reflected).empty(), "ambiguous reflection guides rejected");
+	invalid_reflected = reflected; invalid_reflected.specular_motion.format = vk::Format::eR16Sfloat;
+	check(!DLSSRayReconstruction::Validate(invalid_reflected).empty(), "scalar texture cannot be reflection motion");
+	invalid_reflected = reflected; invalid_reflected.specular_motion.extent.width /= 2;
+	check(!DLSSRayReconstruction::Validate(invalid_reflected).empty(), "reflection motion must match lighting grid");
 	auto bad = in; bad.noisy_hdr.format = vk::Format::eR8G8B8A8Unorm;
 	check(!DLSSRayReconstruction::Validate(bad).empty(), "SDR final frame rejected");
 	bad = in; bad.diffuse_albedo.format = vk::Format::eR8G8B8A8Srgb;

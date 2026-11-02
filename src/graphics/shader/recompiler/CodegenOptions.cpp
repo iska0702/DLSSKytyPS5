@@ -85,6 +85,7 @@ CodegenOptions FromEnvironment() {
 		options.rt_node_budget = static_cast<uint32_t>(std::strtoul(budget, nullptr, 0));
 	}
 	options.rt_node_stats = EnvFlag("KYTY_RT_NODE_STATS", options.rt_node_stats);
+	options.rr_guide_capture = EnvFlag("KYTY_RR_GUIDE_CAPTURE", options.rr_guide_capture);
 	if (const auto* mode = std::getenv("KYTY_MAD_MODE"); mode != nullptr) {
 		if (std::strcmp(mode, "exact") == 0) {
 			options.mad_mode = MadMode::Exact;

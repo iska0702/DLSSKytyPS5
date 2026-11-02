@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -1683,7 +1684,8 @@ static bool AppendAmmMapRecord(uint64_t                                 command_
 }
 
 static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offset,
-                               uint64_t destination, uint64_t size, uint64_t* bytes_read);
+                               uint64_t destination, uint64_t size, uint64_t* bytes_read,
+                               std::shared_ptr<Graphics::DirectStorageIntegration::DirectStorageRead> prefetched = {});
 
 static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_result,
                                    uint32_t* error_offset,
@@ -1845,9 +1847,28 @@ static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_r
 		diagnostic->commands_signature = signature;
 	}
 
-	for (const auto& entry: ordered) {
+	// Speculate only host I/O within a consecutive read run. Guest copies, maps, syncs and
+	// completion events still execute in the recorded order, including overlapping reads.
+	using DsRead = Graphics::DirectStorageIntegration::DirectStorageRead;
+	std::unordered_map<size_t, std::shared_ptr<DsRead>> streaming_reads;
+	for (size_t ordered_index = 0; ordered_index < ordered.size(); ++ordered_index) {
+		const auto& entry = ordered[ordered_index];
 		switch (entry.kind) {
 			case CommandKind::ReadFile: {
+				auto& storage = Graphics::DirectStorageIntegration::DirectStorageManager::Instance();
+				if (storage.IsEnabled() && storage.IsAvailable()) {
+					uint64_t ahead_bytes = 0;
+					for (size_t ahead = ordered_index; ahead < ordered.size() && ahead < ordered_index + 8; ++ahead) {
+						if (ordered[ahead].kind != CommandKind::ReadFile) break;
+						const auto& read = state.read_file_commands[ordered[ahead].index];
+						if (read.size > 8ull * 1024 * 1024 - ahead_bytes) break;
+						ahead_bytes += read.size;
+						if (streaming_reads.contains(ahead)) continue;
+						std::string path;
+						if (AprShared::TryGetHostPath(read.file_id, &path))
+							streaming_reads.emplace(ahead, storage.EnqueueFileRead(path, read.file_offset, read.size));
+					}
+				}
 				const auto& command = state.read_file_commands[entry.index];
 				std::string host_path;
 				if (!AprShared::TryGetHostPath(command.file_id, &host_path)) {
@@ -1862,8 +1883,14 @@ static int ExecuteAprCommandBuffer(uint64_t command_buffer, int32_t* execution_r
 				HangWatchdog::Scope read("ampr-file", command.destination, command.size,
 				                         command.file_id, command.file_offset, command_buffer);
 				uint64_t            bytes_read = 0;
+				std::shared_ptr<DsRead> prefetched;
+				if (const auto found = streaming_reads.find(ordered_index); found != streaming_reads.end()) {
+					prefetched = std::move(found->second);
+					streaming_reads.erase(found);
+				}
 				auto result = ReadHostFileToGuest(host_path, command.file_offset,
-				                                  command.destination, command.size, &bytes_read);
+				                                  command.destination, command.size, &bytes_read,
+				                                  std::move(prefetched));
 				if (diagnostic != nullptr) diagnostic->read_bytes += bytes_read;
 				if (HangTrace::Enabled()) {
 					char thread_name[64] = "(host)";
@@ -1976,7 +2003,8 @@ static bool AdvanceCommandBuffer(uint64_t command_buffer, uint64_t record_size) 
 }
 
 static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offset,
-                               uint64_t destination, uint64_t size, uint64_t* bytes_read) {
+                               uint64_t destination, uint64_t size, uint64_t* bytes_read,
+                               std::shared_ptr<Graphics::DirectStorageIntegration::DirectStorageRead> prefetched) {
 	Profiler::ScopedLoadingOperation loading(Profiler::LoadingOperation::AprRead);
 	Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprRequestedBytes, size);
 	if (bytes_read == nullptr) {
@@ -1990,6 +2018,7 @@ static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offse
 	if (!AprShared::IsValidGuestRange(destination, size, true)) {
 		return LibKernel::KERNEL_ERROR_EFAULT;
 	}
+	if (file_offset > UINT64_MAX - size) return LibKernel::KERNEL_ERROR_EINVAL;
 
 	// Try DirectStorage fast-path if enabled and available
 	auto& ds = Graphics::DirectStorageIntegration::DirectStorageManager::Instance();
@@ -1997,26 +2026,40 @@ static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offse
 		// DS worker I/O must not write directly into guest pages: they may be
 		// write-protected by GPU tracking. Copy on the emulator thread, like the
 		// standard path, so its guest-memory fault/tracking protocol runs.
-		std::vector<uint8_t> staging(static_cast<size_t>(std::min(size, APR_HOST_READ_CHUNK_SIZE)));
+		using Read = Graphics::DirectStorageIntegration::DirectStorageRead;
+		struct Pending { std::shared_ptr<Read> read; uint64_t requested; };
+		std::deque<Pending> pending;
+		uint64_t queued = 0;
+		if (prefetched) {
+			pending.push_back({std::move(prefetched), size});
+			queued = size;
+		}
 		bool ds_ok = true;
 		while (*bytes_read < size) {
-			const auto request = std::min<uint64_t>(staging.size(), size - *bytes_read);
-			uint64_t read = 0;
-			if (file_offset > UINT64_MAX - *bytes_read ||
-			    !ds.LoadFileToHostMemory(std::filesystem::path(host_path), file_offset + *bytes_read,
-			                            staging.data(), request, &read)) {
+			// Four in-flight 1 MiB blocks overlap storage reads with protected guest copies.
+			while (queued < size && pending.size() < 4) {
+				const auto request = std::min<uint64_t>(1024 * 1024, size - queued);
+				pending.push_back({ds.EnqueueFileRead(host_path, file_offset + queued, request), request});
+				queued += request;
+			}
+			auto next = std::move(pending.front());
+			pending.pop_front();
+			if (!next.read || !next.read->Wait()) {
 				ds_ok = false;
 				break;
 			}
+			const auto staging = next.read->Bytes();
+			const auto read = static_cast<uint64_t>(staging.size());
 			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprHostReadBytes, read);
 			if (read != 0) {
 				Profiler::ScopedLoadingOperation guest_copy(Profiler::LoadingOperation::AprGuestCopy);
 				HangWatchdog::Scope copy("ampr-dstorage-guest-copy", destination + *bytes_read, read);
 				std::memcpy(reinterpret_cast<void*>(destination + *bytes_read), staging.data(), read);
+				ds.PublishRead(next.read, destination + *bytes_read);
 			}
 			Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprGuestCopiedBytes, read);
 			*bytes_read += read;
-			if (read < request) break;
+			if (read < next.requested) break;
 		}
 		if (ds_ok) {
 			if (*bytes_read < size) Profiler::CountLoadingEvent(Profiler::LoadingEvent::AprShortReads);

@@ -226,9 +226,9 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	});
 
 #if defined(_WIN32)
-	m_directstorage_checkbox = new QCheckBox(tr("DirectStorage File I/O (Experimental)"), this);
+	m_directstorage_checkbox = new QCheckBox(tr("DirectStorage Asset Streaming (Experimental)"), this);
 	m_directstorage_checkbox->setToolTip(
-	    tr("Use Microsoft DirectStorage for file reads. GPU texture streaming and GPU decompression are not integrated."));
+	    tr("Overlap asset reads and guest processing. Eligible unchanged texture data feeds Vulkan staging and GPU detiling directly. Guest-compressed or modified data uses the normal upload path; GPU decompression of PS5 archives is not provided."));
 	m_ui->compatibilityLayout->addWidget(m_directstorage_checkbox);
 #endif
 

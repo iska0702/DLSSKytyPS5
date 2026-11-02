@@ -365,3 +365,5 @@ VALUE_OPCODE(Sendmsg, Void)
 VALUE_OPCODE(TtraceData, Void)
 VALUE_OPCODE(InstPrefetch, Void)
 VALUE_OPCODE(SelectU32, U32, U1, U32, U32)
+// Raw reflection parameter/hit id -> dedicated host buffer; never guest memory.
+VALUE_OPCODE(StoreRayGuide, Void, U32, U32, U32, U32, U32, U1)

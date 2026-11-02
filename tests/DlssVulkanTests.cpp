@@ -1,6 +1,7 @@
 // Optional Windows/GPU integration test for the production DLSSManager.
 #define NOMINMAX
 #include "graphics/presentation/dlss/dlssManager.h"
+#include "graphics/presentation/dlss/rrPlayroomMaterials.h"
 #include "common/emulatorConfig.h"
 #include "common/logging/log.h"
 #include <algorithm>
@@ -11,21 +12,23 @@
 #include <vector>
 
 using namespace Libs::Graphics;
+void RunRRReflectionExportSmoke(GraphicContext& graphics);
+void RunRRMaterialSmoke(GraphicContext& graphics);
 
 static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
     auto check = [](vk::Result result, const char* name) {
         if (result != vk::Result::eSuccess) throw std::runtime_error(std::string(name) + ": " + vk::to_string(result));
     };
     if (!rr.IsSupported()) throw std::runtime_error(rr.Status());
-    std::array<VulkanImage,8> images;
-    std::array<vk::ImageView,8> views {};
+    std::array<VulkanImage,9> images;
+    std::array<vk::ImageView,9> views {};
     RRInputs in; in.certified_pre_denoise = true;
-    std::array<RRTexture*,8> textures {&in.noisy_hdr,&in.diffuse_albedo,&in.specular_albedo,
-        &in.normal_roughness,&in.depth,&in.motion,&in.specular_hit_distance,&in.output_hdr};
+    std::array<RRTexture*,9> textures {&in.noisy_hdr,&in.diffuse_albedo,&in.specular_albedo,
+        &in.normal_roughness,&in.depth,&in.motion,&in.specular_hit_distance,&in.specular_motion,&in.output_hdr};
     for (size_t i=0; i<images.size(); ++i) {
         auto& t=*textures[i];
-        t.extent = i==7 ? vk::Extent2D{1280,720} : vk::Extent2D{640,360};
-        t.format = i==4 || i==6 ? vk::Format::eR32Sfloat : i==5 ? vk::Format::eR16G16Sfloat : vk::Format::eR16G16B16A16Sfloat;
+        t.extent = i==8 ? vk::Extent2D{1280,720} : vk::Extent2D{640,360};
+        t.format = i==4 || i==6 ? vk::Format::eR32Sfloat : i==5 || i==7 ? vk::Format::eR16G16Sfloat : vk::Format::eR16G16B16A16Sfloat;
         vk::ImageCreateInfo create {}; create.imageType=vk::ImageType::e2D; create.format=t.format;
         create.extent={t.extent.width,t.extent.height,1}; create.mipLevels=create.arrayLayers=1;
         create.samples=vk::SampleCountFlagBits::e1; create.tiling=vk::ImageTiling::eOptimal;
@@ -36,13 +39,17 @@ static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
         check(g.device.createImageView(&view,nullptr,&views[i]),"RR image view");
         VmaAllocationInfo allocation {}; vmaGetAllocationInfo(g.allocator,images[i].allocation,&allocation);
         t.image=images[i].image; t.view=views[i]; t.memory=allocation.deviceMemory; t.usage=create.usage;
-        t.layout=i==7 ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal;
+        t.layout=i==8 ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal;
     }
     std::array<float,124> camera {};
     camera[0]=1.20628512f; camera[5]=2.14450693f; camera[10]=-1.00010002f; camera[11]=-1; camera[14]=-.100010008f;
     std::copy_n(camera.data(),16,camera.data()+32);
     camera[16]=camera[21]=camera[26]=camera[31]=camera[48]=camera[53]=camera[58]=camera[63]=1;
     camera[106]=.1f; camera[107]=999.934143f; camera[108]=640; camera[109]=360;
+    DLSSMatrix projection {},inverse_projection {};
+    std::copy_n(camera.data()+32,16,projection.data());
+    if(!DLSSInvert(projection,inverse_projection))throw std::runtime_error("RR test material projection inverse");
+    std::copy(inverse_projection.begin(),inverse_projection.end(),camera.begin()+64);
     in.camera=DecodeAstroDLSSCamera(camera,640,360);
     in.world_to_view[0]=in.world_to_view[5]=in.world_to_view[10]=in.world_to_view[15]=1;
     in.view_to_world=in.world_to_view;
@@ -63,13 +70,18 @@ static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
         b.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
         command.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,vk::PipelineStageFlagBits::eAllCommands,{},0,nullptr,0,nullptr,1,&b);
     };
-    for (uint32_t frame=0;frame<3;++frame) {
+    const auto hit_distance = in.specular_hit_distance, reflected_motion = in.specular_motion;
+    RRPlayroomMaterials material_preparation(g);
+    // Exercise both documented reflection inputs and switch back to catch stale SDK tags.
+    for (uint32_t frame=0;frame<7;++frame) {
+        in.specular_hit_distance = hit_distance; in.specular_motion = reflected_motion;
         check(command.reset({}),"RR reset"); vk::CommandBufferBeginInfo begin {}; check(command.begin(&begin),"RR begin");
-        for (size_t i=0;i<7;++i) {
+        for (size_t i=0;i<8;++i) {
             auto& t=*textures[i]; barrier(t.image,frame==0?vk::ImageLayout::eUndefined:t.layout,vk::ImageLayout::eTransferDstOptimal);
             vk::ClearColorValue clear {}; clear.float32[3]=1;
             if (i==0) {clear.float32[0]=.15f;clear.float32[1]=.3f;clear.float32[2]=.6f;}
-            if (i==1 || i==2) for(int c=0;c<3;++c)clear.float32[c]=i==1?.5f:.04f;
+            if (i==1) for(int c=0;c<3;++c)clear.float32[c]=.5f;
+            if (i==2) clear.float32[1]=.5f; // decoded-source metal=0, linear roughness=.5
             if (i==3) {clear.float32[2]=1;clear.float32[3]=.5f;}
             if (i==4) clear.float32[0]=.5f;
             if (i==6) clear.float32[0]=1;
@@ -79,7 +91,17 @@ static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
         }
         barrier(in.output_hdr.image,frame==0?vk::ImageLayout::eUndefined:vk::ImageLayout::eTransferSrcOptimal,vk::ImageLayout::eGeneral);
         in.camera.reset=frame==0;
-        if (!rr.Evaluate(command,in,DLSSMode::Performance,frame))throw std::runtime_error(rr.Status());
+        const bool use_reflected_motion = frame >= 3 && frame < 6;
+        if (use_reflected_motion) in.specular_hit_distance = {};
+        else in.specular_motion = {};
+        RRPlayroomMaterialInputs materials;
+        materials.base_color=in.diffuse_albedo;materials.metal_roughness=in.specular_albedo;
+        materials.view_normal=in.normal_roughness;materials.depth=in.depth;materials.camera=camera;
+        auto guides=material_preparation.Record(command,materials);
+        auto evaluated=in;
+        evaluated.diffuse_albedo=guides->Diffuse();evaluated.specular_albedo=guides->Specular();
+        evaluated.normal_roughness=guides->NormalRoughness();
+        if (!rr.Evaluate(command,evaluated,DLSSMode::Performance,frame))throw std::runtime_error(rr.Status());
         barrier(in.output_hdr.image,vk::ImageLayout::eGeneral,vk::ImageLayout::eTransferSrcOptimal);
         vk::BufferImageCopy copy {}; copy.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1};copy.imageExtent={1280,720,1};
         command.copyImageToBuffer(in.output_hdr.image,vk::ImageLayout::eTransferSrcOptimal,staging,1,&copy);
@@ -90,7 +112,8 @@ static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
         const auto* center=static_cast<const uint16_t*>(mapped)+(360*1280+640)*4;
         const bool finite=std::all_of(center,center+3,[](uint16_t h){return (h&0x7c00)!=0x7c00;});
         const bool nonzero=(center[0]&0x7fff)||(center[1]&0x7fff)||(center[2]&0x7fff);
-        std::printf("RR HDR frame %u: RGB half bits=%04x,%04x,%04x\n",frame,center[0],center[1],center[2]);
+        std::printf("RR HDR frame %u (%s): RGB half bits=%04x,%04x,%04x\n",frame,
+            use_reflected_motion ? "specular motion" : "hit distance",center[0],center[1],center[2]);
         auto half = [](uint16_t h) {
             const int exponent = (h >> 10) & 31;
             const float sign = h & 0x8000 ? -1.0f : 1.0f;
@@ -106,7 +129,7 @@ static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
     vmaDestroyBuffer(g.allocator,staging,stagingAllocation);
     for(size_t i=0;i<images.size();++i){g.device.destroyImageView(views[i],nullptr);g.DeleteImage(images[i]);}
     g.device.destroyCommandPool(pool,nullptr);
-    std::puts("DLSS Ray Reconstruction HDR dispatch + GPU readback: PASS (synthetic lighting, not game integration)");
+    std::puts("DLSS Ray Reconstruction GPU material preparation + HDR dispatch/readback: PASS (synthetic lighting, not game integration)");
 }
 
 int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
@@ -183,7 +206,11 @@ int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
         settings.reflex_mode = ReflexMode::On; settings.diagnostics = requirementsOnly;
         if (!dlss.Initialize(g, settings) || (!rrTest && (!dlss.IsFGSupported() || !dlss.IsReflexSupported())))
             throw std::runtime_error("DLSS-G and Reflex not available: " + dlss.GetStatusMessage());
-        if (rrTest) RunRRLightingSmoke(g, dlss.RayReconstruction());
+        if (rrTest) {
+            RunRRReflectionExportSmoke(g);
+            RunRRMaterialSmoke(g);
+            RunRRLightingSmoke(g, dlss.RayReconstruction());
+        }
         if (requirementsOnly || rrTest) {
             dlss.Shutdown(g); g.DestroyAllocator(); g.device.destroy(nullptr); g.instance.destroy(nullptr);
             return 0;

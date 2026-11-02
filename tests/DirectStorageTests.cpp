@@ -15,6 +15,7 @@
 #endif
 
 int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest = false);
+int RunDirectStorageVulkanSmoke();
 
 namespace {
 
@@ -145,6 +146,44 @@ void TestDirectStorageHostMemoryFileStreaming() {
 		bytes_read = 99;
 		Check(!ds.LoadFileToHostMemory(L"nonexistent_directstorage_file.bin", 0, tail.data(), tail.size(), &bytes_read) &&
 		      bytes_read == 0, "Missing file fails with zero bytes for fallback");
+
+		std::vector<std::shared_ptr<Libs::Graphics::DirectStorageIntegration::DirectStorageRead>> reads;
+		for (uint64_t i = 0; i < 8; ++i)
+			reads.push_back(ds.EnqueueFileRead(test_filename, i * 1048576 + 37, 1048576));
+		bool batch_exact = true;
+		for (uint64_t i = 0; i < reads.size(); ++i) {
+			if (!reads[i] || !reads[i]->Wait()) { batch_exact = false; continue; }
+			const auto bytes = reads[i]->Bytes();
+			batch_exact &= bytes.size() == 1048576 &&
+			               std::memcmp(bytes.data(), reference_data.data() + i * 1048576 + 37, bytes.size()) == 0;
+			batch_exact &= reads[i]->IsComplete() && reads[i]->Wait(); // wait is idempotent
+		}
+		Check(batch_exact, "Eight outstanding storage reads complete byte-exactly at unaligned file offsets");
+		reads.clear();
+		auto short_read = ds.EnqueueFileRead(test_filename, file_size - 17, 128);
+		Check(short_read && short_read->Wait() && short_read->Bytes().size() == 17 &&
+		      std::memcmp(short_read->Bytes().data(), reference_data.data() + file_size - 17, 17) == 0,
+		      "Async read clips at EOF without exposing uninitialized bytes");
+		short_read.reset();
+		auto eof = ds.EnqueueFileRead(test_filename, file_size, 128);
+		Check(eof && eof->Wait() && eof->Bytes().empty(), "Async EOF completes successfully with no bytes");
+		eof.reset();
+		Check(!ds.EnqueueFileRead(L"nonexistent_directstorage_file.bin", 0, 128),
+		      "Async missing file returns fallback without poisoning later status entries");
+		Check(!ds.EnqueueFileRead(test_filename, 0, 33ull * 1024 * 1024), "Oversized async read is rejected");
+		for (unsigned i = 0; i < 64; ++i) reads.push_back(ds.EnqueueFileRead(test_filename, i, 32));
+		Check(std::all_of(reads.begin(), reads.end(), [](const auto& read) { return bool(read); }) &&
+		      !ds.EnqueueFileRead(test_filename, 0, 32), "Outstanding ticket budget bounds streaming memory and queue pressure");
+		reads.clear(); // each abandoned ticket must drain before releasing its destination/event
+		auto after_abandon = ds.EnqueueFileRead(test_filename, 11, 4096);
+		Check(after_abandon && after_abandon->Wait() && after_abandon->Bytes().size() == 4096,
+		      "Queue stays usable after abandoned outstanding tickets");
+		auto survives_shutdown = ds.EnqueueFileRead(test_filename, 51, 1048576);
+		ds.Shutdown();
+		Check(survives_shutdown && survives_shutdown->Wait() &&
+		      std::memcmp(survives_shutdown->Bytes().data(), reference_data.data() + 51, 1048576) == 0,
+		      "Shutdown drains owned destinations; completed tickets remain readable");
+		Check(ds.Initialize(nullptr), "Streaming queue can reinitialize after shutdown with old tickets retained");
 	} else {
 		std::printf("[INFO] DirectStorage runtime unavailable, skipping hardware direct streaming benchmark.\n");
 	}
@@ -185,6 +224,7 @@ void TestDirectStorageSharedTextureLifecycle() {
 
 int main(int argc, char* argv[]) {
 	Config::Initialize();
+	if (argc > 1 && std::strcmp(argv[1], "--directstorage-vulkan") == 0) return RunDirectStorageVulkanSmoke();
     if (argc > 1 && std::strcmp(argv[1], "--dlss-rr-vulkan") == 0) return RunDLSSVulkanSmoke(false, false, true);
     if (argc > 1 && (std::strcmp(argv[1], "--dlss-vulkan") == 0 || std::strcmp(argv[1], "--dlss-requirements") == 0 || std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0))
         return RunDLSSVulkanSmoke(std::strcmp(argv[1], "--dlss-requirements") == 0, std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0);

@@ -222,7 +222,7 @@ uint32_t GetReflexMode() {
 }
 
 bool DirectStorageEnabled() {
-	return g_config->directstorage_enabled;
+	return g_config != nullptr && g_config->directstorage_enabled;
 }
 
 void SetDirectStorageEnabled(bool enabled) {

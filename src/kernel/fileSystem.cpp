@@ -12,6 +12,7 @@
 #include "common/stringUtils.h"
 #include "common/threads.h"
 #include "kernel/memory.h"
+#include "graphics/directstorage/directStorageFileIO.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
 #include "libs/network.h"
@@ -776,13 +777,24 @@ int64_t KYTY_SYSV_ABI KernelPread(int d, void* buf, size_t nbytes, int64_t offse
 		                         std::min<uint64_t>(nbytes, remaining));
 	}
 	uint32_t bytes_read = 0;
-	file->f.Seek(offset);
-	{
-		Profiler::ScopedLoadingOperation native_read(Profiler::LoadingOperation::PreadNativeRead);
-		file->f.Read(buf, static_cast<uint32_t>(nbytes), &bytes_read);
+	bool streamed = false;
+	const auto readable = std::min<uint64_t>(nbytes, remaining);
+	if (!is_invalid && !file->writable && readable != 0 && readable <= 32ull * 1024 * 1024 &&
+	    Config::DirectStorageEnabled()) {
+		uint64_t read = 0;
+		streamed = Graphics::DirectStorageIntegration::TryReadFile(file->real_name, static_cast<uint64_t>(offset),
+		                                                          buf, readable, &read);
+		if (streamed) bytes_read = static_cast<uint32_t>(read);
+	}
+	if (!streamed) {
+		file->f.Seek(offset);
+		{
+			Profiler::ScopedLoadingOperation native_read(Profiler::LoadingOperation::PreadNativeRead);
+			file->f.Read(buf, static_cast<uint32_t>(nbytes), &bytes_read);
+		}
+		file->f.Seek(pos);
 	}
 	Profiler::CountLoadingEvent(Profiler::LoadingEvent::PreadReadBytes, bytes_read);
-	file->f.Seek(pos);
 
 	file->mutex.Unlock();
 

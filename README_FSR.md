@@ -9,8 +9,8 @@ In Launcher configuration, enable **AMD FidelityFX FSR 3.1 (Experimental)**. The
 CLI examples (from the build directory):
 
 ```powershell
-.\kyty_emulator.exe --game "D:\Games\PPSA01325" --screen-width 2560 --screen-height 1440 --fsr --fsr-sharpness 0.35 --playgo-hack
-.\kyty_emulator.exe --game "D:\Games\PPSA01325" --screen-width 2560 --screen-height 1440 --fsr-fg --fsr-sharpness 0.35 --playgo-hack
+.\kyty_emulator.exe --game "D:\Eboot\PPSA01325" --screen-width 2560 --screen-height 1440 --fsr --fsr-sharpness 0.35 --playgo-hack
+.\kyty_emulator.exe --game "D:\Eboot\PPSA01325" --screen-width 2560 --screen-height 1440 --fsr-fg --fsr-sharpness 0.35 --playgo-hack
 ```
 
 Select the game's internal resolution through the existing game patches. FSR uses the actual input and display sizes; selecting a mode does not reduce the guest rendering cost automatically. `--no-fsr` disables FSR and its FG. Sharpening is applied once inside FSR; the shared presentation CAS pass is skipped on those frames.
@@ -48,3 +48,16 @@ cmake --build build --target fsr_vulkan_tests dlss_camera_tests
 ```
 
 The GPU test executes three SR frames and three optical-flow/interpolation frames, reads the output back and verifies a constant-color reference. It also destroys both kinds of contexts. The default mode runs without a presentation window. `--present` additionally exercises the real replacement swapchain and checks that generated frames increase the actual present count (three application frames produced six presents on the verification GPU). Neither mode confirms gameplay quality or long-session frame pacing. The standalone SR API owns its three external shared textures, avoiding the SDK 1.1.4 combined wrapper's double backend destruction in upscaling-only mode. The Vulkan device explicitly enables the memory-requirements extension alias resolved by this SDK.
+
+### PLAYROOM runtime check, 2026-10-16
+
+The local `D:\Eboot\PPSA01325` 01.905.000 build was checked with FSR FG and DirectStorage
+on the RTX 5060 Laptop GPU. `build/fsr-playroom-check.log` reports actual FSR evaluation at
+1708x960 -> 2560x1440 and a sample of 120 application presents / 238 actual presents.
+Loading frames without temporal guides use fallback; the title later reports FSR 3.1 with
+Frame Generation. No device-loss or fatal error was found during this short check.
+The independent `build/fsr_vulkan_tests.exe --present` test passed SR/interpolation/readback
+and produced six actual presents from three application frames
+(`build/fsr-playroom-gpu-check.log`). These checks do not certify gameplay image quality
+or long-session pacing. `tools/Run_Playroom_FSR_Streaming.cmd` reproduces the local launch;
+the selected patch's DLSS Quality label describes its dimensions, which FSR also consumes.

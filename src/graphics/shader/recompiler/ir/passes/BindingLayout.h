@@ -16,6 +16,7 @@ const DescriptorBinding* FindBinding(const BindingLayout& layout, DescriptorBind
 // Programs whose BVH node tests are counted (BvhIntersectRay with KYTY_RT_NODE_BUDGET or
 // KYTY_RT_NODE_STATS). The count reports through GDS, so such a program binds GDS.
 [[nodiscard]] bool UsesBvhNodeCount(const Program& program);
+[[nodiscard]] bool UsesRayGuide(const Program& program);
 
 } // namespace Libs::Graphics::ShaderRecompiler::IR
 

@@ -100,6 +100,9 @@ std::vector<uint8_t> CodegenFingerprint() {
 	b.U8(options.bda_writes ? 1u : 0u);
 	b.U32(options.rt_node_budget);
 	b.U8(options.rt_node_stats ? 1u : 0u);
+	b.U8(options.rr_guide_capture ? 1u : 0u);
+	// Native descriptor stride changed when the dedicated ray-guide binding was added.
+	b.U32(static_cast<uint32_t>(IR::DescriptorBindingKind::Count));
 
 	// Host device state the emitter reads (set once by the device layer).
 	const auto float_controls = Spirv::GetHostFloatControls();

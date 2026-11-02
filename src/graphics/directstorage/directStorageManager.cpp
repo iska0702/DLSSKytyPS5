@@ -14,6 +14,7 @@
 
 #include "graphics/directstorage/directStorageManager.h"
 #include "graphics/directstorage/directStorageConfig.h"
+#include "graphics/host_gpu/vramBudget.h"
 
 #include "common/logging/log.h"
 #include "common/profiler.h"
@@ -265,13 +266,40 @@ bool DirectStorageManager::Initialize(GraphicContext* graphics) {
 
 	m_available = true;
 	m_status_message = "DirectStorage + Vulkan initialized successfully";
-	std::printf("[DirectStorage] File I/O ready (GPU streaming is not integrated).\n");
+	std::printf("[DirectStorage] Async streaming ready: APR/pread -> mapped Vulkan staging -> GPU texture tiler.\n");
+	std::printf("[DirectStorage] VRAM collection: %s\n",
+	            graphics != nullptr && graphics->CanReportMemoryUsage() && VramBudget::GcEnabled()
+	                ? "frame-aged, current device budget" : "standard collector / explicit override");
 	return true;
 #endif
 }
 
 void DirectStorageManager::Shutdown() {
 	Common::LockGuard lock(m_mutex);
+	if (m_available) {
+		const auto stats = GetStats();
+		std::printf("[DirectStorage] Session: reads=%llu bytes=%llu errors=%llu mapped=%llu published=%llu "
+		            "texture_lookups=%llu texture_sources=%llu texture_bytes=%llu changed=%llu\n",
+		            static_cast<unsigned long long>(stats.async_completed),
+		            static_cast<unsigned long long>(stats.async_completed_bytes),
+		            static_cast<unsigned long long>(stats.async_errors),
+		            static_cast<unsigned long long>(stats.mapped_reads),
+		            static_cast<unsigned long long>(stats.published_reads),
+		            static_cast<unsigned long long>(stats.texture_lookups),
+		            static_cast<unsigned long long>(stats.texture_streams),
+		            static_cast<unsigned long long>(stats.texture_stream_bytes),
+		            static_cast<unsigned long long>(stats.texture_changed_fallbacks));
+	}
+	// Completion tickets own their buffers and events. Drain them before closing the queue
+	// so callers can still wait or inspect a ticket after shutdown/reinitialization.
+	for (const auto& weak : m_reads) {
+		if (const auto read = weak.lock()) {
+			read->Wait();
+			read->ReleaseNativeStorage();
+		}
+	}
+	m_published_reads.clear();
+	m_reads.clear();
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	if (m_gpu_queue) {
 		m_gpu_queue->Close();
@@ -308,117 +336,20 @@ void DirectStorageManager::Shutdown() {
 
 bool DirectStorageManager::LoadFileToHostMemory(const std::filesystem::path& path, uint64_t file_offset,
                                                void* destination, uint64_t size, uint64_t* bytes_read) {
-	if (bytes_read) {
-		*bytes_read = 0;
-	}
-
-	if (!IsEnabled()) {
-		return false;
-	}
-
-	if (!destination || size == 0) {
-		return false;
-	}
-
-#if KYTY_PLATFORM != KYTY_PLATFORM_WINDOWS
-	return false;
-#else
+	if (bytes_read) *bytes_read = 0;
+	if (!destination || size == 0) return false;
+	const auto started = std::chrono::steady_clock::now();
+	auto read = EnqueueFileRead(path, file_offset, size);
+	if (!read || !read->Wait()) return false;
+	const auto bytes = read->Bytes();
+	if (!bytes.empty()) std::memcpy(destination, bytes.data(), bytes.size());
+	PublishRead(read, reinterpret_cast<uint64_t>(destination));
+	if (bytes_read) *bytes_read = bytes.size();
 	Common::LockGuard lock(m_mutex);
-	if (!m_available || !m_memory_queue || !m_dstorage_factory) return false;
-	m_stats.total_requests++;
-	m_stats.file_to_memory_requests++;
-
-	const auto start_time = std::chrono::high_resolution_clock::now();
-
-	std::wstring wpath = path.wstring();
-	ComPtr<IDStorageFile> dstorage_file;
-	HRESULT hr = m_dstorage_factory->OpenFile(wpath.c_str(), IID_PPV_ARGS(&dstorage_file));
-	if (FAILED(hr)) {
-		m_stats.error_count++;
-		LOGF("[DirectStorage] OpenFile failed for %s: %s\n", Common::PathToString(path).c_str(), HrToString(hr).c_str());
-		return false;
-	}
-
-	BY_HANDLE_FILE_INFORMATION file_info {};
-	hr = dstorage_file->GetFileInformation(&file_info);
-	if (FAILED(hr)) {
-		m_stats.error_count++;
-		LOGF("[DirectStorage] GetFileInformation failed: %s\n", HrToString(hr).c_str());
-		return false;
-	}
-
-	const uint64_t file_size = (static_cast<uint64_t>(file_info.nFileSizeHigh) << 32) | file_info.nFileSizeLow;
-	if (file_offset >= file_size) {
-		return true; // EOF, 0 bytes read
-	}
-
-	const uint64_t readable_bytes = (std::min)(size, file_size - file_offset);
-	if (readable_bytes > DSTORAGE_STAGING_BUFFER_SIZE_32MB) {
-		++m_stats.fallback_count;
-		return false; // callers chunk large reads; never truncate to UINT32
-	}
-	if (readable_bytes == 0) {
-		return true;
-	}
-
-	HANDLE event_handle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-	if (!event_handle) {
-		m_stats.error_count++;
-		return false;
-	}
-
-	DSTORAGE_REQUEST request {};
-	request.Options.SourceType = DSTORAGE_REQUEST_SOURCE_FILE;
-	request.Options.DestinationType = DSTORAGE_REQUEST_DESTINATION_MEMORY;
-	request.Source.File.Source = dstorage_file.Get();
-	request.Source.File.Offset = file_offset;
-	request.Source.File.Size = static_cast<uint32_t>(readable_bytes);
-	request.Destination.Memory.Buffer = destination;
-	request.Destination.Memory.Size = static_cast<uint32_t>(readable_bytes);
-	request.UncompressedSize = static_cast<uint32_t>(readable_bytes);
-
-	m_memory_queue->EnqueueRequest(&request);
-	m_memory_queue->EnqueueSetEvent(event_handle);
-	m_memory_queue->Submit();
-
-	const DWORD wait_result = WaitForSingleObject(event_handle, INFINITE);
-	if (wait_result != WAIT_OBJECT_0) {
-		// Stop all writes before the caller frees or reuses the destination buffer.
-		m_memory_queue->Close();
-		m_available = false;
-		++m_stats.error_count;
-		CloseHandle(event_handle);
-		LOGF("[DirectStorage] Completion wait failed: %lu\n", wait_result);
-		return false;
-	}
-	CloseHandle(event_handle);
-
-	DSTORAGE_ERROR_RECORD error_record {};
-	if (WaitForSingleObject(m_memory_queue->GetErrorEvent(), 0) == WAIT_OBJECT_0)
-		m_memory_queue->RetrieveErrorRecord(&error_record);
-	if (FAILED(error_record.FirstFailure.HResult)) {
-		m_stats.error_count++;
-		LOGF("[DirectStorage] Memory request failed: %s\n", HrToString(error_record.FirstFailure.HResult).c_str());
-		return false;
-	}
-
-	const auto end_time = std::chrono::high_resolution_clock::now();
-	const double elapsed_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-	m_stats.last_read_duration_ms = elapsed_ms;
-	m_stats.total_read_time_ms += elapsed_ms;
-	m_stats.total_bytes_loaded += readable_bytes;
-	if (m_stats.file_to_memory_requests == 1 || m_stats.file_to_memory_requests % 1024 == 0) {
-		std::printf("[DirectStorage] Host I/O completed: requests=%llu bytes=%llu errors=%llu\n",
-		     m_stats.file_to_memory_requests, m_stats.total_bytes_loaded, m_stats.error_count);
-		std::fflush(stdout);
-	}
-
-	if (bytes_read) {
-		*bytes_read = readable_bytes;
-	}
-
+	m_stats.last_read_duration_ms = std::chrono::duration<double, std::milli>(
+	    std::chrono::steady_clock::now() - started).count();
+	m_stats.total_read_time_ms += m_stats.last_read_duration_ms;
 	return true;
-#endif
 }
 
 bool DirectStorageManager::LoadFileToSharedTexture2D(const std::filesystem::path& path, uint32_t width,

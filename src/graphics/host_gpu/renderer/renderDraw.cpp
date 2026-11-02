@@ -30,6 +30,7 @@
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/host_gpu/vulkanCommon.h"
+#include "graphics/presentation/dlss/rrGuestTrace.h"
 #include "graphics/shader/recompiler/BufferFormat.h"
 #include "graphics/shader/recompiler/CodegenOptions.h"
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
@@ -2717,6 +2718,39 @@ static void CaptureDLSSCameraConstants(const CommandBuffer& buffer, const DrawRe
 	}
 }
 
+static void LogRRDrawTrace(const CommandBuffer& buffer, const DrawRenderState& state,
+                           std::span<PreparedBindings* const> bindings) {
+	if (!Config::DLSSDiagnosticsEnabled() || !buffer.GetContext().HasGpu()) return;
+	if (state.ps_active && state.ps_input_info.stage.program != nullptr) {
+		const auto pass = RRGuestTrace::Begin(buffer.GetContext().GetGpu().GetFrameNum(),
+		                                     "draw", state.ps_input_info.stage.program->shader_hash);
+		if (pass != 0) {
+			for (const auto* stage : {&state.vertex_info[0].stage, &state.ps_input_info.stage}) {
+				const auto prepared = std::find_if(bindings.begin(), bindings.end(),
+				    [&](const auto* binding) { return binding->runtime == stage; });
+				if (stage->program != nullptr && stage->resources != nullptr)
+					RRGuestTrace::Stage(pass, stage == &state.ps_input_info.stage ? "PS" : "VS",
+					                   *stage->program, *stage->resources,
+					                   prepared != bindings.end() ? *prepared : nullptr);
+			}
+			for (uint32_t i = 0; i < state.color_count; ++i) {
+				const auto& color = state.color_info[i];
+				const auto size = color.Extent();
+				RRGuestTrace::Target(pass, color.target_slot, color.desc.info.data.address,
+				                     size.width, size.height, vk::to_string(color.desc.view_info.format),
+				                     false, true, RRGuestTrace::View(color.image_id, color.desc.view_info));
+			}
+			const auto& depth = state.depth_info;
+			if (depth.image_id)
+				RRGuestTrace::Target(pass, 0, depth.desc.info.data.address, depth.desc.info.extent.width,
+				                     depth.desc.info.extent.height, vk::to_string(depth.desc.view_info.format),
+				                     true, depth.depth_write_enable,
+				                     RRGuestTrace::View(depth.image_id, depth.desc.view_info));
+			RRGuestTrace::End(pass);
+		}
+	}
+}
+
 static void LogDLSSTargetInventory(const CommandBuffer& buffer, const DrawRenderState& state) {
 	if (!Config::DLSSDiagnosticsEnabled() || !state.ps_active ||
 	    state.ps_input_info.stage.program == nullptr) return;
@@ -3550,6 +3584,9 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 		}
 	}
 	CommitStats::Mark(CommitStats::Phase::AcquireTargets);
+	// This common emission path also covers prepared/reused draws, which bypass the
+	// older one-shot target inventory. Trace only after successful resource acquisition.
+	LogRRDrawTrace(buffer, state, stages);
 	if (Config::TemporalUpscalingEnabled() && state.ps_active && state.ps_input_info.stage.program != nullptr &&
 	    state.color_count != 0 && state.depth_info.image_id &&
 	    state.depth_info.desc.view_info.format == vk::Format::eD32SfloatS8Uint) {

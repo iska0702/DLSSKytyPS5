@@ -26,6 +26,9 @@ struct RRTexture {
 struct RRInputs {
 	RRTexture noisy_hdr, diffuse_albedo, specular_albedo, normal_roughness;
 	RRTexture depth, motion, specular_hit_distance;
+	// Dense motion of virtually reflected geometry, not the primary-surface motion.
+	// Supply exactly one reflection guide: this or world-space specular_hit_distance.
+	RRTexture specular_motion;
 	RRTexture output_hdr; // RGBA16F/32F, GENERAL, storage usage, output resolution.
 	DLSSCamera camera;
 	DLSSMatrix world_to_view {}, view_to_world {};
@@ -54,6 +57,7 @@ private:
 	std::string m_status = "RR not requested";
 	vk::Extent2D m_previous_input {}, m_previous_output {};
 	DLSSMode m_previous_mode = DLSSMode::Off;
+	bool m_previous_specular_motion = false;
 	uint32_t m_viewport = 1; // Separate from the final SDR presentation viewport.
 };
 } // namespace Libs::Graphics

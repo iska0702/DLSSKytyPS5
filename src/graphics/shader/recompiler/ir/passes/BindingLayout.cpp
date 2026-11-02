@@ -87,6 +87,13 @@ bool UsesBvhNodeCount(const Program& program) {
 	return false;
 }
 
+bool UsesRayGuide(const Program& program) {
+	for (const auto* block : program.blocks)
+		for (const auto& inst : *block)
+			if (inst.GetOpcode() == ValueOpcode::StoreRayGuide) return true;
+	return false;
+}
+
 bool UsesMipStats(const Program& program) {
 	static const bool enabled = [] {
 		const auto* mode = std::getenv("KYTY_LOD_STATS_MODE");
@@ -184,6 +191,7 @@ void AllocateBindings(Program& program, uint32_t push_data_start_dword) {
 	if (mip_stats) {
 		AddBinding(next, DescriptorBindingKind::MipStats);
 	}
+	if (UsesRayGuide(program)) AddBinding(next, DescriptorBindingKind::RayGuide);
 
 	program.bindings                = std::move(next);
 	program.binding_layout_complete = true;

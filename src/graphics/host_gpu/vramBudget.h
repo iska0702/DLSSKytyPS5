@@ -4,7 +4,8 @@
 #include <algorithm>
 #include <cstdint>
 
-// KYTY_VRAM_GC_BUDGET=1 (default 0: off; live switch): the caches collect against the device memory
+// KYTY_VRAM_GC_BUDGET=1 (default: on with DirectStorage streaming, otherwise off; live switch):
+// explicit 0/1 overrides streaming defaults. The caches collect against the device memory
 // budget as it is now, frame-aged, instead of thresholds fixed at startup and submission ages.
 //
 // The stock collectors compute their marks once, from the budget at startup, as fractions of
@@ -28,6 +29,10 @@
 namespace Libs::Graphics::VramBudget {
 
 [[nodiscard]] bool GcEnabled() noexcept;
+
+[[nodiscard]] constexpr bool UseBudgetCollector(int64_t override_mode, bool streaming) noexcept {
+	return override_mode < 0 ? streaming : override_mode != 0;
+}
 
 constexpr uint64_t DefaultAgeFrames = 30;
 

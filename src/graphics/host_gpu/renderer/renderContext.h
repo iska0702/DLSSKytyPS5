@@ -29,6 +29,8 @@ class VideoOutDriver;
 namespace Libs::Graphics {
 
 class GuestGpu;
+class RRReflectionCapture;
+class RRPlayroomMaterials;
 
 class RenderContext {
 public:
@@ -40,6 +42,7 @@ public:
 	void                                    InitializeGpu(VideoOut::VideoOutDriver* video_out);
 	void                                    ShutdownGpu();
 	[[nodiscard]] GuestGpu&                 GetGpu() const;
+	[[nodiscard]] bool                     HasGpu() const noexcept { return m_gpu != nullptr; }
 	// Wakes guest queues suspended on external progress (e.g. a completed flip). Any thread;
 	// a no-op before InitializeGpu and after ShutdownGpu has begun.
 	void                                    NotifyGpuProgress();
@@ -69,6 +72,9 @@ public:
 	DLSSSceneGuides dlss_verified_guides {};
 	DLSSCamera dlss_previous_camera {};
 	uint64_t dlss_camera_frame = UINT64_MAX;
+	std::unique_ptr<RRReflectionCapture> rr_reflection_capture;
+	std::unique_ptr<RRPlayroomMaterials> rr_playroom_materials;
+	uint64_t rr_material_frame = UINT64_MAX;
 
 	[[nodiscard]] bool HandleFault(PageFaultAccess access, uint64_t fault_vaddr) noexcept;
 	[[nodiscard]] bool InvalidateMemory(uint64_t vaddr, uint64_t size);

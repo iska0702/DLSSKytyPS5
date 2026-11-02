@@ -92,6 +92,7 @@ void ValidateNativeProgram(const IR::Program& program) {
 	if (uses_gds || LoopGuardApplies(program.shader_hash) || IR::UsesBvhNodeCount(program)) {
 		Expect(Kind::Gds);
 	}
+	if (IR::UsesRayGuide(program)) Expect(Kind::RayGuide);
 	if (program.info.uses_dma) {
 		Expect(Kind::BdaPagetable);
 		Expect(Kind::FaultBuffer);

@@ -2897,6 +2897,25 @@ void TestShaderInfoAndBindingLayout() {
         "binding layout did not collect live typed user-data values");
 }
 
+void TestRayGuideSideEffectBinding() {
+  Fixture fixture;
+  fixture.Emit(ValueOpcode::StoreRayGuide,
+               {Value(0x40200000u), Value(17u), Value(0u), Value(0u), Value(0u), Value(true)});
+  EliminateDeadCode(fixture.program.blocks);
+  Check(UsesRayGuide(fixture.program), "dead-code elimination discarded raw ray export");
+  fixture.program.shader_info_complete = true;
+  AllocateBindings(fixture.program);
+  Check(FindBinding(fixture.program.bindings, DescriptorBindingKind::RayGuide) != nullptr,
+        "ray export does not have its dedicated storage-buffer binding");
+  Check(fixture.program.info.buffers.empty() && fixture.program.info.images.empty(),
+        "host ray export was incorrectly attached to a guest resource");
+  Fixture ordinary;
+  ordinary.program.shader_info_complete = true;
+  AllocateBindings(ordinary.program);
+  Check(!FindBinding(ordinary.program.bindings, DescriptorBindingKind::RayGuide),
+        "ordinary programs acquired a ray-guide binding");
+}
+
 void TestImageBindingAbi() {
   using NumericClass = Libs::Graphics::Prospero::TextureNumericClass;
 
@@ -2909,7 +2928,8 @@ void TestImageBindingAbi() {
             static_cast<uint32_t>(DescriptorBindingKind::FlattenedSrt) == 53u &&
             static_cast<uint32_t>(DescriptorBindingKind::ShaderData) == 54u &&
             static_cast<uint32_t>(DescriptorBindingKind::MipStats) == 55u &&
-            static_cast<uint32_t>(DescriptorBindingKind::Count) == 56u,
+            static_cast<uint32_t>(DescriptorBindingKind::RayGuide) == 56u &&
+            static_cast<uint32_t>(DescriptorBindingKind::Count) == 57u,
         "native descriptor binding anchors changed");
 
   const std::array sampled_dimensions{
@@ -3344,6 +3364,7 @@ int main() {
     Run("conditional indirect image", TestConditionalIndirectImageMaterialization);
     Run("shader info and bindings", TestShaderInfoAndBindingLayout);
     Run("image binding ABI", TestImageBindingAbi);
+    Run("ray export side effect and binding", TestRayGuideSideEffectBinding);
     Run("graphics push constants", TestGraphicsPushConstantLayout);
     Run("resource limit", TestResourceLimitIsTransactional);
     Run("malformed memory kinds", TestMalformedMemoryKindsRejected);

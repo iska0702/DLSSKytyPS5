@@ -323,6 +323,9 @@ void DefineDescriptors(EmitterState& state) {
 			case IR::DescriptorBindingKind::MipStats:
 				state.mip_stats_variable = Define(StorageBufferType(state), "mip_stats");
 				break;
+			case IR::DescriptorBindingKind::RayGuide:
+				state.ray_guide_variable = Define(StorageBufferType(state), "rr_reflection_guide");
+				break;
 			case IR::DescriptorBindingKind::FlattenedSrt:
 				state.flattened_srt_variable = Define(StorageBufferType(state), "flattened_srt");
 				break;

@@ -276,9 +276,29 @@ bool ValidateGame(const Plan& plan, const Program* main_program, std::string* er
 	    (plan.version != "*" && version != plan.version)) {
 		return Fail(error, "cheat file does not match the loaded game");
 	}
-	if (!plan.executable_sha256.empty() &&
-	    !PatchExecutableMatches(main_program->file_name, plan.executable_sha256)) {
-		return Fail(error, "cheat file executable SHA-256 does not match the loaded game");
+	if (!plan.executable_sha256.empty()) {
+		std::string observed;
+		if (!PatchExecutableMatches(main_program->file_name, plan.executable_sha256, &observed)) {
+			const char* ignore_hash = std::getenv("KYTY_IGNORE_CHEAT_HASH");
+			const bool allow_mismatch = (ignore_hash != nullptr && std::strcmp(ignore_hash, "0") != 0);
+			if (allow_mismatch) {
+				Log::WriteToConsoleAndLog(fmt::format(
+				    "Game patch: [Warning] Executable SHA-256 mismatch ignored via KYTY_IGNORE_CHEAT_HASH\n"
+				    "  expected: {}\n"
+				    "  observed: {}\n",
+				    plan.executable_sha256, observed.empty() ? "unreadable" : observed));
+			} else {
+				if (observed.empty()) {
+					return Fail(error, fmt::format("could not read main executable for SHA-256 verification: {}",
+					                               Common::PathToString(main_program->file_name)));
+				}
+				return Fail(error, fmt::format("cheat file executable SHA-256 does not match the loaded game\n"
+				                               "  expected: {}\n"
+				                               "  observed: {}\n"
+				                               "  Set KYTY_IGNORE_CHEAT_HASH=1 to bypass this check",
+				                               plan.executable_sha256, observed));
+			}
+		}
 	}
 	return true;
 }

@@ -85,6 +85,7 @@ vk::DescriptorType NativeDescriptorType(BindingKind kind) {
 		case BindingKind::FaultBuffer:
 		case BindingKind::FlattenedSrt:
 		case BindingKind::ShaderData:
+		case BindingKind::RayGuide:
 		case BindingKind::MipStats: return vk::DescriptorType::eStorageBuffer;
 		case BindingKind::Count: EXIT("invalid native descriptor binding kind");
 	}
@@ -1429,6 +1430,7 @@ void RenderExecutor::PrepareBindings(const ShaderStageRuntime& runtime,
 	prepared.plan             = plan;
 	prepared.plan_shader_data = false;
 	prepared.gds = {nullptr, 0, VK_WHOLE_SIZE};
+	prepared.ray_guide = {nullptr, 0, VK_WHOLE_SIZE};
 	prepared.flattened_srt = {};
 	prepared.shader_data_buffer = {};
 	prepared.buffer_sources.clear();
@@ -2444,12 +2446,15 @@ void RenderExecutor::CommitBindings(CommandBuffer&                     buffer,
 					}
 					case BindingKind::FlattenedSrt:
 					case BindingKind::ShaderData:
+					case BindingKind::RayGuide:
 					case BindingKind::Gds: {
 						const vk::DescriptorBufferInfo* view = &descriptors.gds;
 						if (binding.kind == BindingKind::FlattenedSrt) {
 							view = &descriptors.flattened_srt;
 						} else if (binding.kind == BindingKind::ShaderData) {
 							view = &descriptors.shader_data_buffer;
+						} else if (binding.kind == BindingKind::RayGuide) {
+							view = &descriptors.ray_guide;
 						}
 						EXIT_IF(view->buffer == nullptr);
 						m_descriptor_buffers.push_back(*view);

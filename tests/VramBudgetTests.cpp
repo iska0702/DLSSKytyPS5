@@ -54,11 +54,19 @@ void TestPlans() {
 	Expect(!PlanImages(0, 5 * GiB, 0).retire, "no budget: no retirement");
 }
 
+void TestStreamingDefaults() {
+	Expect(UseBudgetCollector(-1, true), "streaming enables frame-aged budget GC by default");
+	Expect(!UseBudgetCollector(-1, false), "non-streaming keeps the existing default");
+	Expect(!UseBudgetCollector(0, true), "explicit off overrides streaming defaults");
+	Expect(UseBudgetCollector(1, false), "explicit on works independently of streaming");
+}
+
 } // namespace
 
 int main() {
 	TestMarks();
 	TestPlans();
+	TestStreamingDefaults();
 	if (g_failures != 0) {
 		std::printf("%d failure(s)\n", g_failures);
 		return 1;

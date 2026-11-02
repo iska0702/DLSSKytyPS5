@@ -1,5 +1,7 @@
 #include "common/assert.h"
 #include "graphics/shader/recompiler/frontend/translate/Translator.h"
+#include "graphics/shader/recompiler/CodegenOptions.h"
+#include "graphics/shader/recompiler/frontend/translate/rrPlayroomProfile.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Frontend {
 
@@ -11,6 +13,24 @@ void Translator::FailMissingTranslation(const Decoder::Instruction& inst) {
 void Translator::TranslateInstruction(const Decoder::Instruction& inst) {
 	current_opcode = inst.opcode;
 	current_pc     = inst.pc;
+	if (GetCodegenOptions().rr_guide_capture && GetCodegenOptions().rt_software &&
+	    program.stage == ShaderType::Compute &&
+	    PlayroomReflectionCapturePC(program.shader_hash) != UINT32_MAX &&
+	    (inst.pc == PlayroomReflectionCapturePC(program.shader_hash) || inst.opcode == Decoder::Opcode::IMAGE_STORE)) {
+		// Copy raw values before the guest destructively reuses v10. No guest
+		// register, descriptor or HDR channel is changed by this instrumentation.
+		const bool ray_parameter = inst.pc == PlayroomReflectionCapturePC(program.shader_hash);
+		IR::Value distance(0u), hit(0u);
+		if (ray_parameter) {
+			distance=ir.GetVectorReg(static_cast<IR::VectorReg>(10));
+			hit=ir.GetVectorReg(static_cast<IR::VectorReg>(12));
+		}
+		ir.Emit(IR::ValueOpcode::StoreRayGuide,
+		    {distance, hit,
+		     ir.GetVectorReg(static_cast<IR::VectorReg>(22)),
+		     ir.GetVectorReg(static_cast<IR::VectorReg>(23)),
+		     IR::Value(ray_parameter ? 0u : 1u), ir.GetExec()});
+	}
 
 	switch (inst.opcode) {
 		case Decoder::Opcode::UNKNOWN:

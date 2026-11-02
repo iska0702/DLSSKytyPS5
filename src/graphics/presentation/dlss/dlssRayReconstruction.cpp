@@ -53,8 +53,14 @@ std::string DLSSRayReconstruction::Validate(const RRInputs& in) {
 		return "motion must be RG16F or RG32F";
 	if (in.depth.format != vk::Format::eR32Sfloat && in.depth.format != vk::Format::eD32Sfloat)
 		return "depth must be R32F or D32F";
-	if (in.specular_hit_distance.format != vk::Format::eR16Sfloat &&
-	    in.specular_hit_distance.format != vk::Format::eR32Sfloat) return "invalid specular hit distance format";
+	if (bool(in.specular_hit_distance.image) == bool(in.specular_motion.image))
+		return "provide exactly one certified reflection guide: hit distance or specular motion";
+	const bool specular_motion = bool(in.specular_motion.image);
+	if (specular_motion) {
+		if (in.specular_motion.format != vk::Format::eR16G16Sfloat &&
+		    in.specular_motion.format != vk::Format::eR32G32Sfloat) return "invalid specular motion format";
+	} else if (in.specular_hit_distance.format != vk::Format::eR16Sfloat &&
+	           in.specular_hit_distance.format != vk::Format::eR32Sfloat) return "invalid specular hit distance format";
 	for (const auto* albedo : {&in.diffuse_albedo, &in.specular_albedo}) {
 		if (!FloatColor(albedo->format) && albedo->format != vk::Format::eR8G8B8A8Unorm)
 			return "albedo must be linear RGB (sRGB tags are not accepted)";
@@ -70,7 +76,8 @@ std::string DLSSRayReconstruction::Validate(const RRInputs& in) {
 	if (extent.width == 0 || extent.height == 0 || in.output_hdr.extent.width < extent.width ||
 	    in.output_hdr.extent.height < extent.height) return "invalid RR render/output extents";
 	for (const auto* t : {&in.noisy_hdr, &in.diffuse_albedo, &in.specular_albedo,
-	                     &in.normal_roughness, &in.depth, &in.motion, &in.specular_hit_distance}) {
+	                     &in.normal_roughness, &in.depth, &in.motion,
+	                     specular_motion ? &in.specular_motion : &in.specular_hit_distance}) {
 		if (!t->image || !t->view || !t->memory) return "missing lighting resource or image view";
 		if (t->extent != extent) return "lighting inputs use different render grids";
 		if (t->layout != vk::ImageLayout::eShaderReadOnlyOptimal ||
@@ -100,6 +107,7 @@ void DLSSRayReconstruction::Shutdown() {
 	m_allocated = m_history = false; m_active = false; m_supported = false;
 	m_previous_input = m_previous_output = vk::Extent2D {};
 	m_previous_mode = DLSSMode::Off;
+	m_previous_specular_motion = false;
 	SetStatus("RR not requested");
 }
 
@@ -143,22 +151,29 @@ bool DLSSRayReconstruction::Evaluate(vk::CommandBuffer command, const RRInputs& 
 	constants.cameraMotionIncluded = sl::Boolean::eTrue;
 	constants.motionVectors3D = constants.depthInverted = constants.orthographicProjection = sl::Boolean::eFalse;
 	constants.motionVectorsDilated = constants.motionVectorsJittered = sl::Boolean::eFalse;
+	const bool specular_motion = bool(in.specular_motion.image);
 	constants.reset = camera.reset || !had_history || m_previous_input != in.noisy_hdr.extent ||
-	    m_previous_output != in.output_hdr.extent || m_previous_mode != mode
+	    m_previous_output != in.output_hdr.extent || m_previous_mode != mode ||
+	    m_previous_specular_motion != specular_motion
 	    ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	if (!check(slSetConstants(constants, *token, viewport), "constants")) return false;
 	std::array resources {Resource(in.noisy_hdr), Resource(in.diffuse_albedo), Resource(in.specular_albedo),
 	                      Resource(in.normal_roughness), Resource(in.depth), Resource(in.motion),
-	                      Resource(in.specular_hit_distance), Resource(in.output_hdr)};
-	const std::array<sl::BufferType, 8> types {sl::kBufferTypeScalingInputColor, sl::kBufferTypeAlbedo,
+	                      Resource(in.specular_hit_distance), Resource(in.specular_motion), Resource(in.output_hdr)};
+	const std::array<sl::BufferType, 9> types {sl::kBufferTypeScalingInputColor, sl::kBufferTypeAlbedo,
 	    sl::kBufferTypeSpecularAlbedo, sl::kBufferTypeNormalRoughness, sl::kBufferTypeDepth,
-	    sl::kBufferTypeMotionVectors, sl::kBufferTypeSpecularHitDistance, sl::kBufferTypeScalingOutputColor};
+	    sl::kBufferTypeMotionVectors, sl::kBufferTypeSpecularHitDistance,
+	    sl::kBufferTypeSpecularMotionVectors, sl::kBufferTypeScalingOutputColor};
 	const sl::Extent render {0, 0, in.noisy_hdr.extent.width, in.noisy_hdr.extent.height};
 	const sl::Extent output {0, 0, options.outputWidth, options.outputHeight};
-	std::array<sl::ResourceTag, 8> tags;
-	for (size_t i = 0; i < tags.size(); ++i)
-		tags[i] = sl::ResourceTag(&resources[i], types[i], sl::ResourceLifecycle::eValidUntilEvaluate,
+	std::array<sl::ResourceTag, 9> tags;
+	for (size_t i = 0; i < tags.size(); ++i) {
+		// Explicitly untag the other reflection guide on mode switches. A previous
+		// frame's caller-owned resource must never survive as an implicit guide.
+		const bool unused = (i == 6 && specular_motion) || (i == 7 && !specular_motion);
+		tags[i] = sl::ResourceTag(unused ? nullptr : &resources[i], types[i], sl::ResourceLifecycle::eValidUntilEvaluate,
 		                          i == tags.size()-1 ? &output : &render);
+	}
 	if (!check(slSetTagForFrame(*token, viewport, tags.data(), static_cast<uint32_t>(tags.size()),
 	                           static_cast<sl::CommandBuffer*>(command)), "resource tags")) return false;
 	const sl::BaseStructure* inputs[] = {&viewport};
@@ -166,6 +181,7 @@ bool DLSSRayReconstruction::Evaluate(vk::CommandBuffer command, const RRInputs& 
 	if (!check(slEvaluateFeature(sl::kFeatureDLSS_RR, *token, inputs, 1,
 	                            static_cast<sl::CommandBuffer*>(command)), "evaluation")) return false;
 	m_previous_input = in.noisy_hdr.extent; m_previous_output = in.output_hdr.extent; m_previous_mode = mode;
+	m_previous_specular_motion = specular_motion;
 	m_active = true; m_history = true; SetStatus("RR HDR lighting evaluated");
 	return true;
 }

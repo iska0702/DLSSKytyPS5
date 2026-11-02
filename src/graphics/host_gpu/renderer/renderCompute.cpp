@@ -17,7 +17,12 @@
 #include "graphics/host_gpu/renderer/pipeline/shaderResourceBarrier.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
+#include "graphics/host_gpu/renderer/rrReflectionCapture.h"
+#include "graphics/shader/recompiler/ir/passes/BindingLayout.h"
 #include "graphics/host_gpu/vulkanCommon.h"
+#include "graphics/presentation/dlss/rrGuestTrace.h"
+#include "graphics/presentation/dlss/rrPlayroomMaterials.h"
+#include "kernel/memory.h"
 #include "graphics/shader/recompiler/ir/ShaderIR.h"
 #include "graphics/shader/recompiler/ir/passes/ResourceMaterialization.h"
 #include "graphics/shader/shader.h"
@@ -30,6 +35,8 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
 #include <unordered_set>
 #include <cstdio>
 #include <cstring>
@@ -40,6 +47,133 @@
 #include <vector>
 
 namespace Libs::Graphics {
+static std::optional<std::array<float,124>> ReadRRMaterialCamera(RenderContext& context,
+        const ShaderStageRuntime& stage) {
+	const auto* enabled=std::getenv("KYTY_RR_MATERIAL_CAPTURE");
+	if (!enabled || std::string_view(enabled)!="1" || !context.HasGpu() ||
+	    !stage.program || !stage.resources || stage.program->shader_hash!=0x5DF28D2058CAF728ull)
+		return {};
+	const auto frame=context.GetGpu().GetFrameNum();
+	if (!RRGuestTrace::SelectedFrame(frame) || context.rr_material_frame==frame) return {};
+	context.rr_material_frame=frame;
+	const auto& info=stage.program->info;
+	if(info.images.size()<4 || info.images[0].source!=1 || info.images[1].source!=2 ||
+	   info.images[2].source!=3 || info.images[3].source!=4) return {};
+	// Scalar S_BUFFER_LOAD camera reads are flattened SRT values and do not
+	// necessarily appear in info.buffers (which describes native buffer bindings).
+	// Exact shader: s14:s15 is the untouched initial table pointer; PC 0x100
+	// loads the camera V# from table+336, then PCs 0x110/0x124 read its matrices.
+	const auto read=[&](uint64_t address,void* dst,uint64_t bytes) {
+		return context.IsMapped(address,bytes) && context.SynchronizeGpuBackingForRead(address,bytes) &&
+		    Libs::LibKernel::Memory::TryReadBacking(address,dst,bytes);
+	};
+	const auto& user=stage.resources->user_data;
+	if(user.size()>=16) {
+		const uint64_t table=uint64_t(user[14])|(uint64_t(user[15])<<32);
+		ShaderBufferResource descriptor {};
+		std::array<float,124> values {};
+		if(table<=UINT64_MAX-368 && read(table+336,descriptor.fields,sizeof(descriptor.fields)) &&
+		   descriptor.GetSize()>=sizeof(values) && read(descriptor.Base48(),values.data(),sizeof(values))) {
+			ShaderBufferResource lighting {};
+			std::array<uint32_t,8> header {};
+			if(read(table+352,lighting.fields,sizeof(lighting.fields)) && lighting.GetSize()>=sizeof(header) &&
+			   read(lighting.Base48(),header.data(),sizeof(header))) {
+				const uint64_t bvh_reference=uint64_t(user[0])|(uint64_t(user[1])<<32);
+				Log::WriteToConsoleAndLog(fmt::format(
+				    "[DLSS-RR][LightingGate] frame={} probe_count={} ray_gate={} bvh_reference_mapped={}\n",
+				    frame,header[3],header[7],context.IsMapped(bvh_reference,8)));
+			}
+			if(const char* prefix=std::getenv("KYTY_RR_GUIDE_FILE");prefix && prefix[0]) {
+				std::ofstream raw(Common::PathFromUtf8(fmt::format("{}.{}.camera.bin",prefix,frame)),std::ios::binary);
+				raw.write(reinterpret_cast<const char*>(values.data()),sizeof(values));
+			}
+			return values;
+		}
+	}
+	Log::WriteToConsoleAndLog("[DLSS-RR][Materials] Matching camera block unavailable; capture skipped\n");
+	return {};
+}
+
+static void CaptureRRMaterials(RenderContext& context, CommandBuffer& command,
+        const PreparedBindings& bindings, const std::optional<std::array<float,124>>& camera) {
+	if(!camera || bindings.images.size()<4)return;
+	RRPlayroomMaterialInputs in;in.camera=*camera;
+	const std::array<RRTexture*,4> inputs {&in.view_normal,&in.depth,&in.base_color,&in.metal_roughness};
+	for(unsigned i=0;i<4;++i) {
+		const auto& binding=bindings.images[i];const auto& view=binding.desc.view_info;
+		// This decoder addresses single, unmapped 2D views. Do not reinterpret arrays,
+		// mip offsets or component swizzles without a matching game profile.
+		const auto identity=[](vk::ComponentSwizzle s,vk::ComponentSwizzle channel) {
+			return s==vk::ComponentSwizzle::eIdentity || s==channel;
+		};
+		if(view.type!=vk::ImageViewType::e2D || view.base_level || view.base_layer ||
+		   view.level_count!=1 || view.layer_count!=1 || !binding.image_id ||
+		   !identity(view.mapping.r,vk::ComponentSwizzle::eR) ||
+		   (i!=1 && (!identity(view.mapping.g,vk::ComponentSwizzle::eG) ||
+		             !identity(view.mapping.b,vk::ComponentSwizzle::eB)))) {
+			Log::WriteToConsoleAndLog("[DLSS-RR][Materials] Capture skipped: unsupported native view\n");return;
+		}
+		const auto& image=context.GetTextureCache().GetImage(binding.image_id);
+		auto& t=*inputs[i];t.image=image.backing.image;t.view=binding.image_view;
+		t.format=view.format;t.extent={binding.desc.info.extent.width,binding.desc.info.extent.height};
+		t.usage=view.usage;t.layout=binding.layout;
+	}
+	const auto error=RRPlayroomMaterials::Validate(in);
+	if(!error.empty()) {
+		Log::WriteToConsoleAndLog("[DLSS-RR][Materials] Capture skipped: "+error+"\n");return;
+	}
+	std::shared_ptr<RRPlayroomMaterials::Frame> captured;
+	const auto previous_pipeline=command.BoundPipeline(vk::PipelineBindPoint::eCompute);
+	try {
+		if(!context.rr_playroom_materials)
+			context.rr_playroom_materials=std::make_unique<RRPlayroomMaterials>(context.GetGraphics());
+		// Handle() flushes pending barriers before this helper binds its own state.
+		captured=context.rr_playroom_materials->Record(command.Handle(),in);
+		captured->RecordReadback(command.Handle());
+	} catch(const std::exception& e) {
+		Log::WriteToConsoleAndLog(std::string("[DLSS-RR][Materials] Capture failed: ")+e.what()+"\n");
+	}
+	// Raw helper commands bypass the command buffer's pipeline/descriptor cache.
+	// Restore its cached pipeline and force the next guest descriptor commit.
+	if(captured) {
+		if(previous_pipeline)command.Handle().bindPipeline(vk::PipelineBindPoint::eCompute,previous_pipeline);
+		command.InvalidateDescriptors(vk::PipelineBindPoint::eCompute);
+		command.InvalidatePushConstants();
+	}
+	// Even a failed optional readback must retain the already-recorded conversion.
+	if(captured)context.GetCommandScheduler().DeferOperation(
+	    [captured=std::move(captured),frame=context.GetGpu().GetFrameNum()] {captured->Report(frame);});
+}
+
+static void PrepareRayGuideBinding(RenderContext& context, CommandBuffer& buffer,
+                                    PreparedBindings& bindings,
+                                    const ShaderRecompiler::IR::CompiledShaderInfo& program) {
+	if (!ShaderRecompiler::IR::FindBinding(program.bindings,
+	        ShaderRecompiler::IR::DescriptorBindingKind::RayGuide)) return;
+	if (!context.rr_reflection_capture)
+		context.rr_reflection_capture=std::make_unique<RRReflectionCapture>(context.GetGraphics());
+	vk::Extent2D extent {};
+	for (size_t i=0; i<program.info.images.size() && i<bindings.images.size(); ++i)
+		if (program.info.images[i].written) {
+			extent={bindings.images[i].desc.info.extent.width,bindings.images[i].desc.info.extent.height};
+			break;
+		}
+	bindings.ray_guide=context.rr_reflection_capture->Prepare(buffer,
+	    context.HasGpu()?extent:vk::Extent2D{},context.HasGpu()?context.GetGpu().GetFrameNum():0);
+}
+
+static void FinishRayGuideWrite(CommandBuffer& buffer, const PreparedBindings& bindings) {
+	if (!bindings.ray_guide.buffer) return;
+	vk::BufferMemoryBarrier barrier {};
+	barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+	barrier.dstAccessMask=vk::AccessFlagBits::eHostRead|vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite;
+	barrier.srcQueueFamilyIndex=barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+	barrier.buffer=bindings.ray_guide.buffer; barrier.offset=0; barrier.size=bindings.ray_guide.range;
+	buffer.Handle().pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+	    vk::PipelineStageFlagBits::eHost|vk::PipelineStageFlagBits::eComputeShader,
+	    {},0,nullptr,1,&barrier,0,nullptr);
+}
+
 static bool FillSourcesDisjoint(std::span<const ShaderRecompiler::IR::DescriptorValue> sources,
                                  GuestRange destination, uint32_t output_buffer = UINT32_MAX) {
 	for (uint32_t i = 0; i < sources.size(); ++i) {
@@ -415,6 +549,7 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 	// transitions and dependencies are batched); the dispatch goes through Sink(), which records
 	// them first as one barrier, exactly as Handle() did.
 	buffer.BeginEmission();
+	PrepareRayGuideBinding(m_context,buffer,bindings,program);
 	CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
 	               std::span {&descriptor_stage, 1u});
 	bool has_storage_writes = HasShaderBufferWrites(input_info.stage) || program.info.bda_writes;
@@ -432,7 +567,12 @@ void RenderExecutor::DispatchDirect(uint64_t submit_id, CommandBuffer& buffer,
 		ShaderWriteHazardBarrier(buffer, vk::PipelineStageFlagBits::eComputeShader);
 	}
 	buffer.BindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline);
+	const auto rr_trace = Config::DLSSDiagnosticsEnabled() && m_context.HasGpu()
+	    ? RRGuestTrace::Begin(m_context.GetGpu().GetFrameNum(), "compute", program.shader_hash) : 0;
+	RRGuestTrace::Stage(rr_trace, "CS", program, resources, &bindings);
+	RRGuestTrace::End(rr_trace);
 	buffer.Sink().dispatch(thread_group_x, thread_group_y, thread_group_z);
+	FinishRayGuideWrite(buffer,bindings);
 
 	// The removed host fence also ordered read-only dispatches before later writers.
 	ShaderAccessBarrier(buffer, vk::PipelineStageFlagBits::eComputeShader);
@@ -539,6 +679,9 @@ void RenderExecutor::DispatchIndirect(uint64_t submit_id, CommandBuffer& buffer,
 		EXIT_IF(!program.info.uses_dma);
 		m_context.GetBufferCache().PrepareBdaWrites();
 	}
+	// Read the matched CPU view block before acquiring immutable native bindings;
+	// synchronizing a GPU-dirty camera here may flush/merge cache allocations.
+	const auto rr_material_camera=ReadRRMaterialCamera(m_context,input_info.stage);
 	RebindImages(bindings);
 	// Acquiring arguments can merge cache buffers; finalize shader bindings afterward.
 	const auto [args_buffer, args_offset] = m_context.GetBufferCache().ObtainBuffer(
@@ -548,6 +691,17 @@ void RenderExecutor::DispatchIndirect(uint64_t submit_id, CommandBuffer& buffer,
 	PreparedBindings* descriptor_stage = &bindings;
 	// Emission safe point (see DispatchDirect).
 	buffer.BeginEmission();
+	PrepareRayGuideBinding(m_context,buffer,bindings,program);
+	if (bindings.ray_guide.buffer && m_context.rr_reflection_capture) {
+		vk::DescriptorBufferInfo tile_head {};
+		if (!bindings.buffers.empty() && !bindings.buffer_sources.empty() && bindings.buffer_sources[0].size>=4) {
+			tile_head=bindings.buffers[0];
+			const auto offset=bindings.shader_data.at(program.bindings.memory_offset_dword)&0xffu;
+			if (tile_head.range>=offset+4) { tile_head.offset+=offset; tile_head.range=4; }
+			else tile_head={};
+		}
+		m_context.rr_reflection_capture->CaptureDispatch(buffer,args_buffer->Handle(),args_offset,program.shader_hash,tile_head);
+	}
 	CommitBindings(buffer, vk::PipelineBindPoint::eCompute, pipeline,
 	               std::span {&descriptor_stage, 1u});
 	const bool has_storage_writes = HasShaderBufferWrites(input_info.stage) ||
@@ -580,8 +734,14 @@ void RenderExecutor::DispatchIndirect(uint64_t submit_id, CommandBuffer& buffer,
 		                                0, nullptr, 0, nullptr);
 	}
 	buffer.BindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline);
+	const auto rr_trace = Config::DLSSDiagnosticsEnabled() && m_context.HasGpu()
+	    ? RRGuestTrace::Begin(m_context.GetGpu().GetFrameNum(), "compute_indirect", program.shader_hash) : 0;
+	RRGuestTrace::Stage(rr_trace, "CS", program, *input_info.stage.resources, &bindings);
+	RRGuestTrace::End(rr_trace);
 	buffer.Sink().dispatchIndirect(args_buffer->Handle(), args_offset);
+	FinishRayGuideWrite(buffer,bindings);
 	ShaderAccessBarrier(buffer, vk::PipelineStageFlagBits::eComputeShader);
+	CaptureRRMaterials(m_context,buffer,bindings,rr_material_camera);
 	if (program.info.bda_writes) {
 		m_context.GetBufferCache().SettleBdaWrites(program.shader_hash);
 	}
