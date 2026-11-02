@@ -109,6 +109,14 @@ if(WIN32)
 		COMMENT "Deploying Qt runtime and TLS plugins"
 		VERBATIM
 	)
+	add_custom_command(TARGET launcher POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${CMAKE_SOURCE_DIR}/tools/u59-preset.json" "$<TARGET_FILE_DIR:launcher>/u59-preset.json"
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${CMAKE_SOURCE_DIR}/tools/u59-preset.json" "${CMAKE_BINARY_DIR}/u59-preset.json"
+		COMMENT "Copying u59-preset.json to launcher and root directories"
+		VERBATIM
+	)
 endif()
 
 set(launcher_name "kyty_launcher")
