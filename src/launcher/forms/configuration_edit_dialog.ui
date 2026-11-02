@@ -786,15 +786,21 @@
        </item>
       </layout>
      </widget>
-     <widget class="QWidget" name="dlss_tab">
+     <widget class="QWidget" name="upscalers_tab">
       <attribute name="title">
-       <string>NVIDIA DLSS</string>
+       <string>Upscalers &amp; Frame Generation</string>
       </attribute>
-      <layout class="QVBoxLayout" name="dlssTabLayout">
-       <item>
+      <layout class="QGridLayout" name="upscalersGridLayout" columnstretch="1,1">
+       <property name="horizontalSpacing">
+        <number>8</number>
+       </property>
+       <property name="verticalSpacing">
+        <number>8</number>
+       </property>
+       <item row="0" column="0">
         <widget class="QGroupBox" name="dlss_group">
          <property name="title">
-          <string>NVIDIA DLSS</string>
+          <string>NVIDIA DLSS &amp; Reflex</string>
          </property>
          <layout class="QFormLayout" name="dlssLayout">
           <property name="fieldGrowthPolicy">
@@ -919,16 +925,6 @@
             </property>
            </widget>
           </item>
-          <item row="9" column="0" colspan="2">
-           <widget class="QCheckBox" name="checkBox_dlss_rr_enable">
-            <property name="text">
-             <string>Request NVIDIA Ray Reconstruction (lighting backend)</string>
-            </property>
-            <property name="toolTip">
-             <string>Requires certified noisy HDR lighting, linear albedo, normals, roughness and reflection hit distance before game denoising. ASTRO BOT lighting capture is not integrated yet; ordinary DLSS remains active.</string>
-            </property>
-           </widget>
-          </item>
           <item row="8" column="0" colspan="2">
            <widget class="QCheckBox" name="checkBox_dlss_diagnostics">
             <property name="toolTip">
@@ -939,18 +935,107 @@
             </property>
            </widget>
           </item>
+          <item row="9" column="0" colspan="2">
+           <widget class="QCheckBox" name="checkBox_dlss_rr_enable">
+            <property name="text">
+             <string>Request NVIDIA Ray Reconstruction (lighting backend)</string>
+            </property>
+            <property name="toolTip">
+             <string>Requires certified noisy HDR lighting, linear albedo, normals, roughness and reflection hit distance before game denoising. ASTRO BOT lighting capture is not integrated yet; ordinary DLSS remains active.</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
-       <item>
-        <spacer name="dlssSpacer">
+       <item row="0" column="1">
+        <widget class="QGroupBox" name="fsr_group">
+         <property name="title">
+          <string>AMD FidelityFX FSR 3.1 (Experimental)</string>
+         </property>
+         <layout class="QFormLayout" name="fsrLayout">
+          <property name="fieldGrowthPolicy">
+           <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+          </property>
+          <item row="0" column="0" colspan="2">
+           <widget class="QCheckBox" name="checkBox_fsr_enable">
+            <property name="toolTip">
+             <string>Uses verified guest depth, motion and camera data. Takes precedence over DLSS. Render resolution is selected in game patches; sharpness is set below.</string>
+            </property>
+            <property name="text">
+             <string>Enable FSR Super Resolution</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="2">
+           <widget class="QCheckBox" name="checkBox_fsr_fg_enable">
+            <property name="toolTip">
+             <string>Requires two dedicated Vulkan queues. Pauses in scenes without temporal inputs. Guest HUD may show interpolation artifacts.</string>
+            </property>
+            <property name="text">
+             <string>Enable FSR Frame Generation (2x)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="label_fsr_sharpness">
+            <property name="text">
+             <string>FSR sharpness:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <layout class="QHBoxLayout" name="fsr_sharpness_layout">
+            <item>
+             <widget class="QSlider" name="slider_fsr_sharpness">
+              <property name="toolTip">
+               <string>FSR sharpening intensity (0.00 - 1.00)</string>
+              </property>
+              <property name="maximum">
+               <number>100</number>
+              </property>
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="label_fsr_sharpness_value">
+              <property name="minimumSize">
+               <size>
+                <width>40</width>
+                <height>0</height>
+               </size>
+              </property>
+              <property name="text">
+               <string>0.00</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item row="3" column="0" colspan="2">
+           <widget class="QLabel" name="label_fsr_desc">
+            <property name="text">
+             <string>Uses verified guest depth, motion and camera data. Note: Enabling FSR automatically disables DLSS and vice versa.</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item row="1" column="0" colspan="2">
+        <spacer name="upscalersSpacer">
          <property name="orientation">
           <enum>Qt::Vertical</enum>
          </property>
          <property name="sizeHint" stdset="0">
           <size>
            <width>20</width>
-           <height>40</height>
+           <height>20</height>
           </size>
          </property>
         </spacer>

@@ -240,26 +240,16 @@ ConfigurationEditDialog::ConfigurationEditDialog(Configuration& info, QWidget* p
 	m_ui->compatibilityLayout->addWidget(m_directstorage_checkbox);
 #endif
 
-    auto* fsrGroup = new QGroupBox(tr("AMD FidelityFX FSR 3.1 (Experimental)"), this);
-    auto* fsrLayout = new QVBoxLayout(fsrGroup);
-    m_fsr_checkbox = new QCheckBox(tr("Enable FSR Super Resolution"), fsrGroup);
-    m_fsr_fg_checkbox = new QCheckBox(tr("Enable FSR Frame Generation (2x)"), fsrGroup);
-    m_fsr_checkbox->setToolTip(tr("Uses verified guest depth, motion and camera data. Takes precedence over DLSS. Render resolution is selected in game patches; sharpness is set below."));
-    m_fsr_fg_checkbox->setToolTip(tr("Requires two dedicated Vulkan queues. Pauses in scenes without temporal inputs. Guest HUD may show interpolation artifacts."));
-    fsrLayout->addWidget(m_fsr_checkbox);
-    fsrLayout->addWidget(m_fsr_fg_checkbox);
-    auto* sharpnessLabel = new QLabel(tr("FSR sharpness"), fsrGroup);
-    m_fsr_sharpness = new QSlider(Qt::Horizontal, fsrGroup);
+    m_fsr_checkbox = m_ui->checkBox_fsr_enable;
+    m_fsr_fg_checkbox = m_ui->checkBox_fsr_fg_enable;
+    m_fsr_sharpness = m_ui->slider_fsr_sharpness;
     m_fsr_sharpness->setRange(0, 100);
-    fsrLayout->addWidget(sharpnessLabel);
-    fsrLayout->addWidget(m_fsr_sharpness);
-    connect(m_fsr_sharpness, &QSlider::valueChanged, sharpnessLabel, [sharpnessLabel](int value) {
-        sharpnessLabel->setText(tr("FSR sharpness: %1").arg(value / 100.0, 0, 'f', 2));
+    connect(m_fsr_sharpness, &QSlider::valueChanged, this, [this](int value) {
+        m_ui->label_fsr_sharpness_value->setText(QString::number(value / 100.0, 'f', 2));
     });
-    m_ui->compatibilityLayout->addWidget(fsrGroup);
 #if !KYTY_ENABLE_FSR
-    fsrGroup->setEnabled(false);
-    fsrGroup->setToolTip(tr("This build does not include FidelityFX Vulkan libraries."));
+    m_ui->fsr_group->setEnabled(false);
+    m_ui->fsr_group->setToolTip(tr("This build does not include FidelityFX Vulkan libraries."));
 #endif
     connect(m_fsr_checkbox, &QCheckBox::toggled, this, [this](bool enabled) {
         m_fsr_fg_checkbox->setEnabled(enabled);
@@ -503,6 +493,7 @@ void ConfigurationEditDialog::Init(const Configuration& info) {
     m_fsr_fg_checkbox->setChecked(info.fsr_fg_enabled);
     m_fsr_fg_checkbox->setEnabled(info.fsr_enabled);
     m_fsr_sharpness->setValue(qBound(0, static_cast<int>(std::round(info.dlss_sharpness * 100.0f)), 100));
+	m_ui->label_fsr_sharpness_value->setText(QString::number(m_fsr_sharpness->value() / 100.0, 'f', 2));
     m_fsr_sharpness->setEnabled(info.fsr_enabled);
 
 	UpdateDLSSUI();

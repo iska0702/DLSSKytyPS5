@@ -1,5 +1,6 @@
 # KytyPS5 (NVIDIA DLSS, Frame Generation & DirectStorage Fork)
 
+[![Version](https://img.shields.io/badge/release-v1.5.5-orange.svg)](https://github.com/iska0702/DLSSKytyPS5/releases/tag/v1.5.5)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#system-requirements)
 [![Base](https://img.shields.io/badge/upstream-Jetsku%2FKytyPS5%20int21-green.svg)](https://github.com/Jetsku/KytyPS5)
 [![License](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
@@ -61,7 +62,7 @@ An advanced experimental fork of [Jetsku/KytyPS5](https://github.com/Jetsku/Kyty
 - **Superior Reconstruction:** Tensor Core AI temporal anti-aliasing yields cleaner image edges than bilinear or spatial upscalers.
 - **Reduced Input Latency:** Reflex offsets latency penalty introduced by frame generation buffers.
 - **Fast Asset Streaming:** DirectStorage drastically shortens loading screen times and virtually eliminates stutter in streaming open-world titles.
-- **Intuitive GUI Configuration:** Dedicated NVIDIA DLSS and DirectStorage panels built into the graphical launcher.
+- **Intuitive GUI Configuration:** Dedicated unified **Upscalers & Frame Generation** tab (DLSS + FSR 3.1) and DirectStorage panels in the graphical launcher.
 
 ### Disadvantages & Limitations (Cons)
 - **Hardware Requirement:** NVIDIA DLSS requires an NVIDIA GeForce RTX GPU; Frame Generation (2x/3x/4x) requires RTX 40 or 50 series cards.
