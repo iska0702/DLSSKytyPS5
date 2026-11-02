@@ -171,7 +171,7 @@ DirectStorageTextureSource DirectStorageManager::FindTextureSource(uint64_t addr
 	for (uint64_t done = 0; done < size;) {
 		const auto part = (std::min<uint64_t>)(scratch.size(), size - done);
 		if ((!LibKernel::Memory::TryReadBacking(address + done, scratch.data(), part) &&
-		     !LibKernel::Memory::TryReadPrtBacking(address + done, scratch.data(), part)) ||
+		     !LibKernel::Memory::TryReadSparseBacking(address + done, scratch.data(), part)) ||
 		    std::memcmp(scratch.data(), bytes.data() + source.offset + done, part) != 0) {
 			Common::LockGuard lock(m_mutex);
 			++m_stats.texture_changed_fallbacks;

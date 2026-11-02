@@ -191,38 +191,22 @@ static void PrintUsage() {
 	    "  --trophy-duration <seconds>          Trophy toast duration, 5-10. Default: 6.\n");
 	::printf("  --playgo-hack                       Use the supplied PlayGo stub fallback.\n");
 	::printf(
-	    "  --skip-notice-screen <true|false>    Skip startup logos and notices in supported games.
-"
-	    "                                      Default: false.
-");
-	::printf("  --fsr                               Enable AMD FSR 3.1 Vulkan upscaling (takes precedence over DLSS).
-");
-	::printf("  --fsr-fg                            Enable FSR and 2x frame generation.
-");
-	::printf("  --fsr-sharpness <0.0-1.0>           Set FSR sharpening strength.
-");
-	::printf("  --no-fsr                            Disable FSR and its frame generation.
-");
-	::printf("  --dlss                              Enable NVIDIA DLSS Super Resolution.
-");
-	::printf("  --dlss-mode <mode>                  UltraPerformance, Performance, Balanced, Quality, DLAA.
-");
-	::printf("  --dlss-sharpness <0.0-1.0>          Presentation CAS sharpness. Default: 0.35.
-");
-	::printf("  --dlss-preset <preset>              Default, PresetJ, PresetK, PresetL, PresetM.
-");
-	::printf("  --dlss-rr                           Request RR lighting backend (requires certified pre-denoise HDR inputs).
-");
-	::printf("  --dlss-diagnostics                  Enable verbose DLSS & Streamline diagnostics.
-");
-	::printf("  --dlss-fg                           Enable DLSS Frame Generation (2x frame multiplier).
-");
-	::printf("  --dlss-mfg <3x|4x|dynamic>          Enable Multi-Frame Generation (3x, 4x, or dynamic).
-");
-	::printf("  --reflex <on|boost|off>             NVIDIA Reflex Low Latency mode. Default: on.
-");
-	::printf("  --directstorage                     Enable asynchronous asset/texture streaming (Experimental).
-");
+	    "  --skip-notice-screen <true|false>    Skip startup logos and notices in supported games.\n"
+	    "                                      Default: false.\n");
+	::printf("  --fsr                               Enable AMD FSR 3.1 Vulkan upscaling (takes precedence over DLSS).\n");
+	::printf("  --fsr-fg                            Enable FSR and 2x frame generation.\n");
+	::printf("  --fsr-sharpness <0.0-1.0>           Set FSR sharpening strength.\n");
+	::printf("  --no-fsr                            Disable FSR and its frame generation.\n");
+	::printf("  --dlss                              Enable NVIDIA DLSS Super Resolution.\n");
+	::printf("  --dlss-mode <mode>                  UltraPerformance, Performance, Balanced, Quality, DLAA.\n");
+	::printf("  --dlss-sharpness <0.0-1.0>          Presentation CAS sharpness. Default: 0.35.\n");
+	::printf("  --dlss-preset <preset>              Default, PresetJ, PresetK, PresetL, PresetM.\n");
+	::printf("  --dlss-rr                           Request RR lighting backend (requires certified pre-denoise HDR inputs).\n");
+	::printf("  --dlss-diagnostics                  Enable verbose DLSS & Streamline diagnostics.\n");
+	::printf("  --dlss-fg                           Enable DLSS Frame Generation (2x frame multiplier).\n");
+	::printf("  --dlss-mfg <3x|4x|dynamic>          Enable Multi-Frame Generation (3x, 4x, or dynamic).\n");
+	::printf("  --reflex <on|boost|off>             NVIDIA Reflex Low Latency mode. Default: on.\n");
+	::printf("  --directstorage                     Enable asynchronous asset/texture streaming (Experimental).\n");
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	::printf("  --redzone                            Protect the guest SysV red zone.\n");
 #endif
