@@ -340,7 +340,14 @@ file(GLOB kyty_emulator_src CONFIGURE_DEPENDS
 	"${KYTY_SOURCE_DIR}/loader/*.h"
 )
 
-find_program(KYTY_GLSLANG_VALIDATOR NAMES glslangValidator glslang REQUIRED)
+find_program(KYTY_GLSLANG_VALIDATOR NAMES glslangValidator glslang
+	HINTS
+		"${CMAKE_CURRENT_SOURCE_DIR}/../tools/glslang/bin"
+		"D:/DLSSEmulatorPS5/tools/glslang/bin"
+		ENV VULKAN_SDK
+	PATH_SUFFIXES bin
+	REQUIRED
+)
 set(gpu_tiler_shader_dir "${KYTY_SOURCE_DIR}/graphics/host_gpu/shaders")
 set(gpu_tiler_generated_dir "${PROJECT_BINARY_DIR}/gpu_tiler_shaders")
 set(gpu_tiler_shader_names
@@ -2657,6 +2664,17 @@ add_custom_target(kyty_touch_cursors
 		"$<TARGET_FILE_DIR:kyty_emulator>/assets/cursors"
 	VERBATIM)
 add_dependencies(kyty_emulator kyty_touch_cursors)
+
+add_custom_target(kyty_u59_preset
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		"${CMAKE_CURRENT_SOURCE_DIR}/tools/u59-preset.json"
+		"$<TARGET_FILE_DIR:kyty_emulator>/u59-preset.json"
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		"${CMAKE_CURRENT_SOURCE_DIR}/tools/u59-preset.json"
+		"${CMAKE_BINARY_DIR}/u59-preset.json"
+	VERBATIM)
+add_dependencies(kyty_emulator kyty_u59_preset)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/tools/u59-preset.json" DESTINATION .)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/cursors" DESTINATION assets)
 
 target_link_libraries(kyty_emulator ${kyty_emulator_link_libraries})
