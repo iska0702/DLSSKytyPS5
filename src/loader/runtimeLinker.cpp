@@ -970,7 +970,6 @@ static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exc
 				append("\n");
 			}
 		}
-		}
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		// The faulting host call chain, unwound from the fault context, with each frame's module and
 		// offset (symbolize kyty_emulator.exe frames with llvm-symbolizer --obj=kyty_emulator.exe). A
