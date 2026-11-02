@@ -30,3 +30,5 @@ _Textures/
 *.nsys-rep
 *.ngfx-gputrace
 CMakeUserPresets.json
+
+rebuild_clean.cmd
