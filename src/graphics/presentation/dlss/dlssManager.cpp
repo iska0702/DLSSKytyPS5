@@ -1184,6 +1184,11 @@ void DLSSManager::ReleaseResources(GraphicContext& graphics) {
 }
 
 void DLSSManager::Shutdown(GraphicContext& graphics) {
+	if (graphics.device != nullptr) {
+		try {
+			(void)graphics.device.waitIdle();
+		} catch (...) {}
+	}
 	ReleaseResources(graphics);
 
 	if (m_streamline_loaded) {
@@ -1199,6 +1204,14 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 		slShutdown();
 		m_streamline_loaded = false;
 	}
+
+	m_pfn_vkQueuePresentKHR       = nullptr;
+	m_pfn_vkAcquireNextImageKHR   = nullptr;
+	m_pfn_vkGetSwapchainImagesKHR = nullptr;
+	m_pfn_vkCreateSwapchainKHR    = nullptr;
+	m_pfn_vkDestroySwapchainKHR   = nullptr;
+	m_pfn_vkCreateWin32SurfaceKHR = nullptr;
+	m_pfn_vkDestroySurfaceKHR     = nullptr;
 
 	m_initialized = false;
 	m_available = false;

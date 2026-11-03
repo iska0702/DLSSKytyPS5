@@ -37,6 +37,15 @@ int32_t g_guest_teb_stack_range = [] {
 
 static std::atomic<Handler> g_handler {nullptr};
 static std::atomic_uint32_t g_install_state {0};
+static std::atomic<bool> g_process_exiting {false};
+
+void SetProcessExiting(bool exiting) {
+	g_process_exiting.store(exiting, std::memory_order_release);
+}
+
+bool IsProcessExiting() {
+	return g_process_exiting.load(std::memory_order_acquire);
+}
 
 static_assert(decltype(g_handler)::is_always_lock_free);
 static_assert(decltype(g_install_state)::is_always_lock_free);
@@ -141,6 +150,9 @@ static bool DescribeException(PEXCEPTION_POINTERS exception, ExceptionInfo& info
 }
 
 static LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS exception) noexcept {
+	if (g_process_exiting.load(std::memory_order_acquire)) {
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
 	auto* exception_record = exception->ExceptionRecord;
 
 	if (exception_record->ExceptionCode == DBG_PRINTEXCEPTION_C ||

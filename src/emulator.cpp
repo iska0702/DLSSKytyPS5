@@ -3,6 +3,7 @@
 #include "common/abi.h"
 #include "common/assert.h"
 #include "common/emulatorConfig.h"
+#include "common/hostException.h"
 #include "common/file.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
@@ -149,6 +150,8 @@ static void Execute(const std::filesystem::path& game_patch) {
 	    },
 	    &patch_path);
 	Libs::Graphics::WindowRun();
+	Common::HostException::SetProcessExiting(true);
+	Libs::Graphics::WindowShutdown();
 	std::quick_exit(0);
 }
 

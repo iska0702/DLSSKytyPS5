@@ -1,4 +1,5 @@
 #include "common/subsystems.h"
+#include "common/hostException.h"
 
 namespace Common {
 
@@ -35,6 +36,7 @@ void Subsystems::EmergencyShutdown() {
 }
 
 void Subsystems::EmergencyShutdownActive() {
+	HostException::SetProcessExiting(true);
 	if (g_active_subsystems != nullptr) {
 		g_active_subsystems->EmergencyShutdown();
 	}

@@ -863,6 +863,9 @@ static std::string DescribeCodeAddress(uint64_t address) {
 	return "no module (guest or generated code)";
 }
 static bool KytyExceptionHandler(const Common::HostException::ExceptionInfo& exception_info) {
+	if (Common::HostException::IsProcessExiting()) {
+		return false;
+	}
 	const auto* info = &exception_info;
 
 	if (info->type == Common::HostException::ExceptionType::IllegalInstruction &&

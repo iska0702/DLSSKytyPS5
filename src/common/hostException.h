@@ -70,6 +70,9 @@ extern int32_t            g_guest_teb_stack_range;
 
 using Handler = bool (*)(const ExceptionInfo&);
 
+void SetProcessExiting(bool exiting = true);
+bool IsProcessExiting();
+
 bool InstallHandler(Handler handler);
 // Windows: additionally registers `handler` at the FRONT of the vectored exception handler list
 // for access violations only. It must return false (never terminate) for faults it does not

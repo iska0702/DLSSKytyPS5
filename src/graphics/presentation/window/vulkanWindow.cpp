@@ -2371,6 +2371,11 @@ void WindowContext::RecreateSurface() {
 WindowContext::~WindowContext() {
 	Vr::OpenXrShutdown();
 	ShutdownSystemOverlayInput();
+	if (graphic_ctx.device != nullptr) {
+		try {
+			(void)graphic_ctx.device.waitIdle();
+		} catch (...) {}
+	}
 	presenter.reset();
 	ShaderRecompiler::IR::SetUnmappedBufferProbe(nullptr);
 	LibKernel::Memory::InstallGpuResources(nullptr);
