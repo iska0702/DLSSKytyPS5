@@ -62,6 +62,9 @@ using EnvLookup = std::function<const char*(const char*)>;
 //   kernels are skipped, so lighting is black unless the game's lighting patches are on.
 [[nodiscard]] std::vector<std::string> StartupWarnings(const EnvLookup& env);
 
+
+[[nodiscard]] std::string_view BundledFallbackPresetJson();
+
 } // namespace Common::U59Preset
 
 #endif // EMULATOR_SRC_COMMON_U59PRESET_H_

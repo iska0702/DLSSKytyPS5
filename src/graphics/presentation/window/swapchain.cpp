@@ -673,8 +673,10 @@ void Swapchain::Create() {
 	create_info.imageSharingMode = vk::SharingMode::eExclusive;
 	create_info.preTransform     = transform;
 	create_info.compositeAlpha   = composite;
-	const bool fg_requested = DLSSManager::Instance().IsFGActive() ||
-	    (DLSSManager::Instance().IsFGSupported() && DLSSManager::Instance().GetSettings().fg_enabled);
+	const bool fg_requested = (Config::DLSSFGEnabled() && !Config::FSREnabled()) ||
+	    DLSSManager::Instance().IsFGActive() ||
+	    (DLSSManager::Instance().IsFGSupported() && DLSSManager::Instance().GetSettings().fg_enabled) ||
+	    (Config::FSREnabled() && Config::FSRFGEnabled());
 
 	if (fg_requested) {
 		// DLSS-G / MFG in Vulkan requires unblocked presentation (Mailbox or Immediate); Fifo (VSync) is unsupported with FG

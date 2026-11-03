@@ -1154,13 +1154,13 @@ void DLSSManager::SetPresentMarker(bool start) {
 }
 
 void DLSSManager::ReleaseResources(GraphicContext& graphics) {
-	if (m_streamline_loaded && m_fg_active) {
+	if (m_streamline_loaded && m_fg_active && (!m_settings.fg_enabled || m_settings.fg_mode == DLSSGMode::Off)) {
 		sl::ViewportHandle viewport(m_viewport_id);
 		sl::DLSSGOptions off {};
 		off.mode = sl::DLSSGMode::eOff;
 		slDLSSGSetOptions(viewport, off);
+		m_fg_active = false;
 	}
-	m_fg_active = false;
 	m_last_frame_token = nullptr;
 	m_presented_multiplier = 1;
 	m_had_native_guides = false;

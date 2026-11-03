@@ -21,13 +21,30 @@ static QString ApplyBundledPreset() {
 	std::vector<std::filesystem::path> dirs {std::filesystem::path(app_dir.absolutePath().toStdU16String())};
 	if (QDir parent = app_dir; parent.cdUp()) {
 		dirs.emplace_back(parent.absolutePath().toStdU16String());
+		if (QDir parent_tools = parent; parent_tools.cd("tools")) {
+			dirs.emplace_back(parent_tools.absolutePath().toStdU16String());
+		}
+		if (QDir grand = parent; grand.cdUp()) {
+			if (QDir grand_tools = grand; grand_tools.cd("tools")) {
+				dirs.emplace_back(grand_tools.absolutePath().toStdU16String());
+			}
+		}
+	}
+	if (QDir app_tools = app_dir; app_tools.cd("tools")) {
+		dirs.emplace_back(app_tools.absolutePath().toStdU16String());
 	}
 
-	const auto result = Common::U59Preset::Load(dirs);
+	auto result = Common::U59Preset::Load(dirs);
 	if (result.status != Common::U59Preset::Status::Loaded) {
-		const auto warning = QString::fromStdString(Common::U59Preset::Describe(result));
-		qWarning().noquote() << warning;
-		return warning;
+		// Fallback: parse embedded default preset so emulator never degrades to unoptimized built-in defaults
+		std::string parse_err;
+		if (Common::U59Preset::Parse(Common::U59Preset::BundledFallbackPresetJson(), result.entries, parse_err)) {
+			result.status = Common::U59Preset::Status::Loaded;
+		} else {
+			const auto warning = QString::fromStdString(Common::U59Preset::Describe(result));
+			qWarning().noquote() << warning;
+			return warning;
+		}
 	}
 
 	for (const QString& key : QProcessEnvironment::systemEnvironment().keys()) {
