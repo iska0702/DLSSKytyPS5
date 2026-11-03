@@ -13,6 +13,7 @@
 #include "mainDialog.h"
 #include "patchesDialog.h"
 #include "trophyViewerDialog.h"
+#include "shaderCompilerDialog.h"
 
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
@@ -1313,6 +1314,14 @@ void ConfigurationListWidget::ShowContextMenu(QTreeWidgetItem* witem) {
 	    item != nullptr && TrophyViewerDialog::HasTrophyData(&item->GetInfo());
 
 	QAction* action_run = menu.addAction(tr("Run"), this, SIGNAL(Run()));
+	QAction* action_compile_shaders = menu.addAction(
+	    style()->standardIcon(QStyle::SP_BrowserReload), tr("Compile shaders..."));
+	connect(action_compile_shaders, &QAction::triggered, this,
+	        [this, item = QPointer<ConfigurationItem>(item)]() {
+		        if (item != nullptr) {
+			        CompileShaders(item->GetInfo(), item->icon(0));
+		        }
+	        });
 	QAction* action_open_folder =
 	    menu.addAction(style()->standardIcon(QStyle::SP_DirOpenIcon), tr("Open game folder"), this,
 	                   SLOT(open_game_folder()));
@@ -1363,6 +1372,7 @@ void ConfigurationListWidget::ShowContextMenu(QTreeWidgetItem* witem) {
 	if (item != nullptr) {
 		action_run->setDisabled(item->IsRunning());
 		const auto& base = item->GetInfo().basedir;
+		action_compile_shaders->setDisabled(item->IsRunning() || (!QDir(base).exists() && !GameContent::IsArchive(base)));
 		action_open_folder->setDisabled(!QDir(base).exists() && !GameContent::IsArchive(base));
 		action_view_trophies->setDisabled(!has_trophy_data);
 		action_compress->setDisabled(item->IsRunning() || !QDir(base).exists());
@@ -1371,6 +1381,7 @@ void ConfigurationListWidget::ShowContextMenu(QTreeWidgetItem* witem) {
 		action_delete->setDisabled(item->IsRunning() || !item->GetInfo().custom_settings);
 	} else {
 		action_run->setDisabled(true);
+		action_compile_shaders->setDisabled(true);
 		action_open_folder->setDisabled(true);
 		action_view_trophies->setDisabled(true);
 		action_compress->setDisabled(true);
@@ -1384,4 +1395,9 @@ void ConfigurationListWidget::ShowContextMenu(QTreeWidgetItem* witem) {
 	}
 
 	menu.exec(QCursor::pos());
+}
+
+void ConfigurationListWidget::CompileShaders(const Configuration& info, const QIcon& icon) {
+	ShaderCompilerDialog dialog(info, m_runtime_directory, icon, this);
+	dialog.exec();
 }

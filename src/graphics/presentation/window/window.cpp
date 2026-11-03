@@ -890,7 +890,10 @@ static void WindowCreate(WindowContext& context) {
 
 uint32_t WindowContext::InitialWindowFlags(bool fullscreen) noexcept {
 	auto flags = static_cast<uint32_t>(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
-	if (fullscreen) {
+	const char* precompile_only = std::getenv("KYTY_SHADER_PRECOMPILE_ONLY");
+	if (precompile_only != nullptr && *precompile_only != '\0' && *precompile_only != '0') {
+		flags |= static_cast<uint32_t>(SDL_WINDOW_HIDDEN);
+	} else if (fullscreen) {
 		flags |= static_cast<uint32_t>(SDL_WINDOW_FULLSCREEN);
 	}
 	return flags;

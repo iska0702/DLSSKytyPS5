@@ -45,6 +45,7 @@ public:
 	void ScanGameDirectory();
 	void ViewTrophies();
 	void ViewTrophyOverview();
+	void CompileShaders(const Configuration& info, const QIcon& icon);
 
 signals:
 

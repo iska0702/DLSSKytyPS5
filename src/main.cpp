@@ -207,6 +207,8 @@ static void PrintUsage() {
 	::printf("  --dlss-mfg <3x|4x|dynamic>          Enable Multi-Frame Generation (3x, 4x, or dynamic).\n");
 	::printf("  --reflex <on|boost|off>             NVIDIA Reflex Low Latency mode. Default: on.\n");
 	::printf("  --directstorage                     Enable asynchronous asset/texture streaming (Experimental).\n");
+	::printf("  --precompile-shaders                 Precompile all shaders into pipeline cache before starting.\n");
+	::printf("  --precompile-only                    Precompile all journaled shaders and pipelines to disk/driver cache and exit.\n");
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	::printf("  --redzone                            Protect the guest SysV red zone.\n");
 #endif
@@ -398,6 +400,38 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 
 		if (arg == "--profile") {
 			options.config.profiler_enabled = true;
+			continue;
+		}
+
+		if (arg == "--precompile-shaders") {
+#ifdef _WIN32
+			_putenv_s("KYTY_SHADER_PRECOMPILE", "1");
+			_putenv_s("KYTY_SHADER_PRECOMPILE_WAIT", "1");
+			_putenv_s("KYTY_PIPELINE_PREWARM_COMPUTE", "1");
+#else
+			setenv("KYTY_SHADER_PRECOMPILE", "1", 1);
+			setenv("KYTY_SHADER_PRECOMPILE_WAIT", "1", 1);
+			setenv("KYTY_PIPELINE_PREWARM_COMPUTE", "1", 1);
+#endif
+			continue;
+		}
+
+		if (arg == "--precompile-only") {
+#ifdef _WIN32
+			_putenv_s("KYTY_SHADER_PRECOMPILE", "1");
+			_putenv_s("KYTY_SHADER_PRECOMPILE_WAIT", "1");
+			_putenv_s("KYTY_PIPELINE_PREWARM_COMPUTE", "1");
+			_putenv_s("KYTY_SHADER_PRECOMPILE_ONLY", "1");
+			_putenv_s("KYTY_SHADER_PRECOMPILE_THREADS", "16");
+			_putenv_s("KYTY_PIPELINE_PREWARM_THREADS", "8");
+#else
+			setenv("KYTY_SHADER_PRECOMPILE", "1", 1);
+			setenv("KYTY_SHADER_PRECOMPILE_WAIT", "1", 1);
+			setenv("KYTY_PIPELINE_PREWARM_COMPUTE", "1", 1);
+			setenv("KYTY_SHADER_PRECOMPILE_ONLY", "1", 1);
+			setenv("KYTY_SHADER_PRECOMPILE_THREADS", "16", 1);
+			setenv("KYTY_PIPELINE_PREWARM_THREADS", "8", 1);
+#endif
 			continue;
 		}
 

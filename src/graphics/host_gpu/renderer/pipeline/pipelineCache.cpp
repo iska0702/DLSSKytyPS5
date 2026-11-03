@@ -6257,13 +6257,20 @@ void PipelineCache::InitializeShaderPrecompile() {
 		                 added.sources, added.entries);
 	}
 	if (EnvU64("KYTY_SHADER_PRECOMPILE_REPLAY", 1) == 0 || m_shader_journal->Entries().empty()) {
+		if (EnvU64("KYTY_SHADER_PRECOMPILE_ONLY", 0) != 0) {
+			PipelineCacheLog("Shader precompile: no journaled shaders found to precompile.");
+			std::fflush(stdout);
+			std::fflush(stderr);
+			std::exit(0);
+		}
 		return;
 	}
 	const bool prepare = m_list != nullptr && m_list->prepare;
+	const bool precompile_only = EnvU64("KYTY_SHADER_PRECOMPILE_ONLY", 0) != 0;
 	ShaderPrecompiler::Settings replay;
 	replay.threads     = static_cast<uint32_t>(
-	    std::clamp<uint64_t>(EnvU64("KYTY_SHADER_PRECOMPILE_THREADS", prepare ? 8 : 2), 1, 16));
-	replay.low_priority = !prepare;
+	    std::clamp<uint64_t>(EnvU64("KYTY_SHADER_PRECOMPILE_THREADS", (prepare || precompile_only) ? 16 : 2), 1, 16));
+	replay.low_priority = !prepare && !precompile_only;
 	replay.max_entries = EnvU64("KYTY_SHADER_PRECOMPILE_MAX", 30000);
 	replay.thread_init = [](uint32_t) {
 		Profiler::SetThreadName("ShaderPrecompile");
@@ -6274,9 +6281,9 @@ void PipelineCache::InitializeShaderPrecompile() {
 	replay.priority_source = [](const ShaderJournal::Source& source) {
 		return source.kind == ShaderJournal::Kind::Compute && MayContainBvhIntersect(source.code);
 	};
-	if (EnvU64("KYTY_PIPELINE_PREWARM_COMPUTE", m_list != nullptr ? 1 : 0) != 0) {
+	if (EnvU64("KYTY_PIPELINE_PREWARM_COMPUTE", (m_list != nullptr || precompile_only) ? 1 : 0) != 0) {
 		const auto threads = static_cast<size_t>(
-		    std::clamp<uint64_t>(EnvU64("KYTY_PIPELINE_PREWARM_THREADS", prepare ? 4 : 1), 1, 8));
+		    std::clamp<uint64_t>(EnvU64("KYTY_PIPELINE_PREWARM_THREADS", (prepare || precompile_only) ? 8 : 1), 1, 8));
 		m_compute_prewarm  = std::make_unique<ComputePrewarm>(*this, threads);
 		m_program_cache->prewarm_all_compute = true;
 		PipelineCacheLog("Compute prewarm: the pipelines of replayed compute programs are built on {} background "
@@ -6292,9 +6299,19 @@ void PipelineCache::InitializeShaderPrecompile() {
 	    [this](const ShaderJournal::Source& source, const ShaderJournal::Entry& entry) {
 		    return m_program_cache->ReplayEntry(source, entry);
 	    });
-	if (EnvU64("KYTY_SHADER_PRECOMPILE_WAIT", 0) != 0) {
+	if (EnvU64("KYTY_SHADER_PRECOMPILE_WAIT", 0) != 0 || precompile_only) {
 		// Start-up waits for the replay (the best case of precompiling: tests, measurements).
 		m_shader_precompiler->Wait();
+	}
+	if (precompile_only) {
+		if (m_compute_prewarm != nullptr) {
+			m_compute_prewarm->Drain();
+		}
+		PipelineCacheLog("Shader precompile: all shaders and pipelines precompiled successfully; flushing caches and exiting.");
+		Save();
+		std::fflush(stdout);
+		std::fflush(stderr);
+		std::exit(0);
 	}
 }
 
