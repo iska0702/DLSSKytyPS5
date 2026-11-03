@@ -85,7 +85,9 @@ inline DLSSCamera DecodeAstroDLSSCamera(const std::array<float, 124>& v,
     // Astro doubles the sample pattern in gameplay (up to one render pixel).
     // Preserve that actual displacement; clipping/rejecting half the samples
     // would misalign reconstruction or reset temporal history repeatedly.
-    if (std::abs(out.jitter_pixels[0]) > 1.001f || std::abs(out.jitter_pixels[1]) > 1.001f) return out;
+    if (std::abs(out.jitter_pixels[0]) > 4.0f || std::abs(out.jitter_pixels[1]) > 4.0f) return out;
+    out.jitter_pixels[0] = std::clamp(out.jitter_pixels[0], -2.0f, 2.0f);
+    out.jitter_pixels[1] = std::clamp(out.jitter_pixels[1], -2.0f, 2.0f);
     // Projection jitter is removed before supplying matrices to Streamline.
     projection[8] -= 2.0f * out.jitter_uv[0];
     projection[9] += 2.0f * out.jitter_uv[1];

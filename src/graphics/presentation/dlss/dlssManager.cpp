@@ -687,26 +687,9 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	    guides->depth.extent.width == source_extent.width && guides->depth.extent.height == source_extent.height &&
 	    guides->motion.extent.width == source_extent.width && guides->motion.extent.height == source_extent.height;
 	const bool camera_valid = native_guides && guides->camera.valid;
-	if (!camera_valid) {
-		// Logos, menus and unsupported scenes cannot reconstruct detail temporally
-		// from fabricated depth/motion. Present those frames spatially, including UI.
-		if (m_fg_active) {
-			sl::ViewportHandle viewport(m_viewport_id);
-			sl::DLSSGOptions off {};
-			off.mode = sl::DLSSGMode::eOff;
-			slDLSSGSetOptions(viewport, off);
-			m_fg_active = false;
-			m_presented_multiplier = 1;
-		}
-		m_applied_mode = DLSSMode::Off;
-		m_applied_fg_mode = DLSSGMode::Off;
-		m_had_native_guides = false;
-		m_status = DLSSStatus::Available;
-		const std::string message = "Spatial presentation: temporal inputs unavailable";
-		if (m_status_message != message) Log::WriteToConsoleAndLog("[DLSS] " + message + "\n");
-		m_status_message = message;
-		return false;
-	}
+	// Continuous DLSS & MFG: never disable the pipeline on non-camera frames or menus.
+	// Fallback zero-motion buffers with constants.reset=true keep DLSS spatial AI
+	// upscaling active and DLSS-G / MFG optical flow running without dropping frames.
 
 	if (sr_requested && (source_extent.width > target_extent.width || source_extent.height > target_extent.height)) {
 		// DLSS Super Resolution is an upscaler; it cannot downscale.
@@ -722,9 +705,8 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	}
 	if (m_settings.mode == DLSSMode::DLAA &&
 	    (source_extent.width != target_extent.width || source_extent.height != target_extent.height)) {
-		m_status = DLSSStatus::Available;
-		m_status_message = "DLAA requires native input resolution";
-		return false;
+		// Adapt to Quality upscaling mode when input is non-native instead of failing
+		m_effective_mode = DLSSMode::Quality;
 	}
 
 	if (!PrepareResources(graphics, source_extent, target_extent)) {
@@ -968,7 +950,8 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	constants.cameraFwd           = { 0.0f, 0.0f, 1.0f };
 	// Loading and unsupported passes have no verified guides. Avoid reprojecting
 	// stale history on the first transition into or out of the native producer.
-	constants.reset = (!camera_valid || guides->camera.reset || native_guides != m_had_native_guides ||
+	const bool camera_reset_flag = (guides != nullptr && guides->camera.reset);
+	constants.reset = (!camera_valid || camera_reset_flag || native_guides != m_had_native_guides ||
 	                   m_frame_counter <= 2 || extent_changed)
 	                      ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	if (native_guides != m_had_native_guides || m_frame_counter == 1) {
@@ -997,7 +980,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 	constants.cameraFar  = 1000.0f;
 	constants.cameraFOV  = 1.0f;
 	constants.cameraAspectRatio = static_cast<float>(target_extent.width) / static_cast<float>(target_extent.height);
-	if (camera_valid) {
+	if (camera_valid && guides != nullptr) {
 		const auto& camera = guides->camera;
 		constants.jitterOffset = {camera.jitter_pixels[0], camera.jitter_pixels[1]};
 		constants.cameraPos = {camera.position[0], camera.position[1], camera.position[2]};

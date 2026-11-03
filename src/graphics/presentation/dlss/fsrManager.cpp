@@ -234,7 +234,7 @@ bool FSRManager::Evaluate(GraphicContext& g, vk::CommandBuffer cmd, VulkanImage&
 	    guides.motion.extent.width != input.width || guides.motion.extent.height != input.height ||
 	    input.width == 0 || input.height == 0 || input.width > target.width ||
 	    input.height > target.height) {
-		m->Configure(false);
+		// Do not call Configure(false) to prevent tearing down the frame generation queue pipeline
 		m->history  = false;
 		m->previous = {};
 		m->status   = "FSR: spatial fallback (temporal inputs unavailable)";

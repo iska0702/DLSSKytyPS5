@@ -3428,7 +3428,7 @@ static void UpdateDLSSCamera(const CommandBuffer& buffer, const DrawRenderState&
 		    !context.SynchronizeGpuBackingForRead(resource.Base48(), sizeof(values)) ||
 		    !Libs::LibKernel::Memory::TryReadBacking(resource.Base48(), values.data(), sizeof(values))) continue;
 		const auto* previous = context.dlss_camera_frame != UINT64_MAX &&
-		    frame == context.dlss_camera_frame + 1 ? &context.dlss_previous_camera : nullptr;
+		    frame <= context.dlss_camera_frame + 2 && frame > context.dlss_camera_frame ? &context.dlss_previous_camera : nullptr;
 		auto camera = DecodeAstroDLSSCamera(values, extent.width, extent.height, previous);
 		if (!camera.valid) continue;
 		context.dlss_previous_camera = camera;
@@ -4509,7 +4509,8 @@ void RenderExecutor::ExecutePreparedDraw(uint64_t submit_id, CommandBuffer& buff
 			      state.depth_info.image_id == m_context.dlss_verified_guides.depth))) {
 				m_context.dlss_scene_guides = {color.image_id, state.depth_info.image_id, color.Extent()};
 				m_context.dlss_scene_guides.post_upscaled_color = bot;
-				if (m_context.dlss_camera_frame == m_context.GetGpu().GetFrameNum())
+				if (m_context.dlss_camera_frame != UINT64_MAX &&
+				    m_context.GetGpu().GetFrameNum() <= m_context.dlss_camera_frame + 2)
 					m_context.dlss_scene_guides.camera = m_context.dlss_previous_camera;
 				m_context.dlss_verified_guides = m_context.dlss_scene_guides;
 				if (Config::DLSSDiagnosticsEnabled()) {
