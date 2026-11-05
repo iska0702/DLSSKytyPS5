@@ -14,7 +14,7 @@
 #include <windows.h>
 #endif
 
-int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest = false);
+int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest = false, uint32_t multiplier = 2);
 int RunDirectStorageVulkanSmoke();
 
 namespace {
@@ -226,6 +226,9 @@ int main(int argc, char* argv[]) {
 	Config::Initialize();
 	if (argc > 1 && std::strcmp(argv[1], "--directstorage-vulkan") == 0) return RunDirectStorageVulkanSmoke();
     if (argc > 1 && std::strcmp(argv[1], "--dlss-rr-vulkan") == 0) return RunDLSSVulkanSmoke(false, false, true);
+    if (argc > 1 && std::strcmp(argv[1], "--dlss-mfg3-vulkan") == 0) return RunDLSSVulkanSmoke(false, false, false, 3);
+    if (argc > 1 && std::strcmp(argv[1], "--dlss-mfg4-vulkan") == 0) return RunDLSSVulkanSmoke(false, false, false, 4);
+    if (argc > 1 && std::strcmp(argv[1], "--dlss-mfg4-vulkan-1080p") == 0) return RunDLSSVulkanSmoke(false, true, false, 4);
     if (argc > 1 && (std::strcmp(argv[1], "--dlss-vulkan") == 0 || std::strcmp(argv[1], "--dlss-requirements") == 0 || std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0))
         return RunDLSSVulkanSmoke(std::strcmp(argv[1], "--dlss-requirements") == 0, std::strcmp(argv[1], "--dlss-vulkan-1080p") == 0);
 

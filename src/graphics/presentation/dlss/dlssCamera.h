@@ -86,8 +86,8 @@ inline DLSSCamera DecodeAstroDLSSCamera(const std::array<float, 124>& v,
     // Preserve that actual displacement; clipping/rejecting half the samples
     // would misalign reconstruction or reset temporal history repeatedly.
     if (std::abs(out.jitter_pixels[0]) > 4.0f || std::abs(out.jitter_pixels[1]) > 4.0f) return out;
-    out.jitter_pixels[0] = std::clamp(out.jitter_pixels[0], -2.0f, 2.0f);
-    out.jitter_pixels[1] = std::clamp(out.jitter_pixels[1], -2.0f, 2.0f);
+    // Keep the accepted displacement identical to the projection and motion
+    // jitter. Clamping only the SDK offset would misalign temporal samples.
     // Projection jitter is removed before supplying matrices to Streamline.
     projection[8] -= 2.0f * out.jitter_uv[0];
     projection[9] += 2.0f * out.jitter_uv[1];

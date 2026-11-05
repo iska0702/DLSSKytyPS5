@@ -8,6 +8,9 @@
 #include <array>
 #include <cstdio>
 #include <cmath>
+#include <charconv>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -132,7 +135,7 @@ static void RunRRLightingSmoke(GraphicContext& g, DLSSRayReconstruction& rr) {
     std::puts("DLSS Ray Reconstruction GPU material preparation + HDR dispatch/readback: PASS (synthetic lighting, not game integration)");
 }
 
-int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
+int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest, uint32_t requestedMultiplier) {
     const vk::Extent2D targetExtent = fullHD ? vk::Extent2D{1920,1080} : vk::Extent2D{1280,720};
     const vk::Extent2D inputExtent = fullHD ? vk::Extent2D{1280,720} : vk::Extent2D{854,480};
 #if !defined(_WIN32)
@@ -199,26 +202,39 @@ int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
         g.device.getQueue(g.queue_family, 0, &g.queue);
         g.streamline_queue_start = 1; g.streamline_queue_count = queues - 1;
         if (!g.CreateAllocator()) throw std::runtime_error("Create allocator failed");
+        const auto nativeWaitIdle=VULKAN_HPP_DEFAULT_DISPATCHER.vkDeviceWaitIdle;
         auto& dlss = DLSSManager::Instance();
         DLSSSettings settings; settings.enabled = settings.fg_enabled = true;
         settings.rr_enabled = rrTest; if (rrTest) settings.fg_enabled = false;
-        settings.mode = DLSSMode::Quality; settings.fg_mode = DLSSGMode::FG_2X;
+        settings.mode = DLSSMode::Quality;
+        settings.fg_mode = requestedMultiplier==4 ? DLSSGMode::MFG_4X :
+            requestedMultiplier==3 ? DLSSGMode::MFG_3X : DLSSGMode::FG_2X;
         settings.reflex_mode = ReflexMode::On; settings.diagnostics = requirementsOnly;
         if (!dlss.Initialize(g, settings) || (!rrTest && (!dlss.IsFGSupported() || !dlss.IsReflexSupported())))
             throw std::runtime_error("DLSS-G and Reflex not available: " + dlss.GetStatusMessage());
+        if (!rrTest) {
+            std::printf("DLSS-G requested=%ux, maximum generated frames=%u, dynamic MFG supported=%s\n",
+                requestedMultiplier,dlss.GetMaxFGFrames(),dlss.IsDynamicMFGSupported()?"yes":"no");
+            if (dlss.GetMaxFGFrames()+1<requestedMultiplier)
+                throw std::runtime_error("Requested multiplier is unsupported; a lower multiplier cannot pass this test");
+        }
         if (rrTest) {
             RunRRReflectionExportSmoke(g);
             RunRRMaterialSmoke(g);
             RunRRLightingSmoke(g, dlss.RayReconstruction());
         }
         if (requirementsOnly || rrTest) {
-            dlss.Shutdown(g); g.DestroyAllocator(); g.device.destroy(nullptr); g.instance.destroy(nullptr);
+            dlss.Shutdown(g);
+            if(VULKAN_HPP_DEFAULT_DISPATCHER.vkDeviceWaitIdle!=nativeWaitIdle)
+                throw std::runtime_error("Streamline shutdown did not restore native DeviceWaitIdle");
+            g.DestroyAllocator(); g.device.destroy(nullptr); g.instance.destroy(nullptr);
             return 0;
         }
         const DWORD testStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
         RECT rectangle {0, 0, static_cast<LONG>(targetExtent.width), static_cast<LONG>(targetExtent.height)};
         AdjustWindowRect(&rectangle, testStyle, FALSE);
-        HWND window = CreateWindowExW(WS_EX_APPWINDOW, L"STATIC", L"DLSS FG test - KEEP THIS WINDOW ACTIVE", testStyle,
+        const auto title=L"DLSS "+std::to_wstring(requestedMultiplier)+L"x test - KEEP THIS WINDOW ACTIVE";
+        HWND window = CreateWindowExW(WS_EX_APPWINDOW, L"STATIC", title.c_str(), testStyle,
             CW_USEDEFAULT, CW_USEDEFAULT, rectangle.right-rectangle.left, rectangle.bottom-rectangle.top,
             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
         if (!window) throw std::runtime_error("Create hidden window failed");
@@ -286,6 +302,8 @@ int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
         vk::SemaphoreCreateInfo semaphoreInfo {}; vk::Semaphore acquired, ready;
         check(g.device.createSemaphore(&semaphoreInfo,nullptr,&acquired),"acquire semaphore");
         check(g.device.createSemaphore(&semaphoreInfo,nullptr,&ready),"ready semaphore");
+        vk::FenceCreateInfo fenceInfo {}; vk::Fence rendered;
+        check(g.device.createFence(&fenceInfo,nullptr,&rendered),"render fence");
         auto barrier = [&](vk::Image image, vk::ImageLayout before, vk::ImageLayout after) {
             vk::ImageMemoryBarrier b {}; b.srcAccessMask = vk::AccessFlagBits::eMemoryWrite|vk::AccessFlagBits::eMemoryRead;
             b.dstAccessMask = b.srcAccessMask; b.oldLayout=before; b.newLayout=after;
@@ -293,7 +311,16 @@ int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
             b.subresourceRange={vk::ImageAspectFlagBits::eColor,0,1,0,1};
             command.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,vk::PipelineStageFlagBits::eAllCommands,{},0,nullptr,0,nullptr,1,&b);
         };
-        for (int frame=0; frame<130; ++frame) {
+        uint32_t frameCount=130;
+        if (const auto* value=std::getenv("KYTY_DLSS_TEST_FRAMES"); value && value[0]) {
+            const auto end=value+std::strlen(value);
+            const auto parsed=std::from_chars(value,end,frameCount);
+            if(parsed.ec!=std::errc{} || parsed.ptr!=end || frameCount<130 || frameCount>3600)
+                throw std::invalid_argument("KYTY_DLSS_TEST_FRAMES must be between 130 and 3600");
+        }
+        std::printf("DLSS presentation test: %u application frames, %ux, %ux%u output\n",
+            frameCount,requestedMultiplier,targetExtent.width,targetExtent.height);
+        for (uint32_t frame=0; frame<frameCount; ++frame) {
             MSG message;
             while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
             if (GetForegroundWindow() != window) throw std::runtime_error("DLSS-G test lost foreground focus");
@@ -322,27 +349,33 @@ int RunDLSSVulkanSmoke(bool requirementsOnly, bool fullHD, bool rrTest) {
             check(command.end(),"end"); vk::PipelineStageFlags wait=vk::PipelineStageFlagBits::eAllCommands;
             vk::SubmitInfo submit {}; submit.waitSemaphoreCount=1; submit.pWaitSemaphores=&acquired; submit.pWaitDstStageMask=&wait;
             submit.commandBufferCount=1; submit.pCommandBuffers=&command; submit.signalSemaphoreCount=1; submit.pSignalSemaphores=&ready;
-            check(g.queue.submit(1,&submit,nullptr),"submit");
+            check(g.device.resetFences(1,&rendered),"reset render fence");
+            check(g.queue.submit(1,&submit,rendered),"submit");
             VkSemaphore signal=ready; VkPresentInfoKHR present {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
             present.swapchainCount=1; present.pSwapchains=&swapchain; present.pImageIndices=&index;
             present.waitSemaphoreCount=1; present.pWaitSemaphores=&signal;
             dlss.SetPresentMarker(true); check(static_cast<vk::Result>(dlss.QueuePresent(g.queue,&present)),"present"); dlss.SetPresentMarker(false);
-            check(g.device.waitIdle(),"wait idle");
+            // Streamline owns background queues. DeviceWaitIdle would require
+            // external synchronization with their worker-thread submissions.
+            check(g.device.waitForFences(1,&rendered,true,UINT64_MAX),"wait render fence");
         }
         const auto multiplier=dlss.GetEffectiveMultiplier();
         std::printf("DLSS Vulkan: SR evaluated, observed FG multiplier=%u\n",multiplier);
-        check(g.device.waitIdle(),"drain");
+        check(g.queue.waitIdle(),"drain application queue");
         dlss.ReleaseResources(g);
         for (auto imageView:views) g.device.destroyImageView(imageView,nullptr);
         dlss.DestroySwapchain(g.device,swapchain,nullptr);
         dlss.DestroySurface(g.instance,surface);
         dlss.Shutdown(g);
+        if(VULKAN_HPP_DEFAULT_DISPATCHER.vkDeviceWaitIdle!=nativeWaitIdle)
+            throw std::runtime_error("Streamline shutdown did not restore native DeviceWaitIdle");
         for (auto imageView : {colorView,guides.depth_view,guides.motion_view}) g.device.destroyImageView(imageView,nullptr);
         for (auto* image : {&color,&guides.depth,&guides.motion}) g.DeleteImage(*image);
+        g.device.destroyFence(rendered,nullptr);
         g.device.destroySemaphore(acquired,nullptr); g.device.destroySemaphore(ready,nullptr); g.device.destroyCommandPool(pool,nullptr);
         g.DestroyAllocator(); g.device.destroy(nullptr); g.instance.destroy(nullptr); DestroyWindow(window);
         if (previousForeground) SetForegroundWindow(previousForeground);
-        if (multiplier<2) throw std::runtime_error("DLSS-G did not report additional presented frames");
+        if (multiplier!=requestedMultiplier) throw std::runtime_error("DLSS-G did not report the requested multiplier");
         std::puts("DLSS Vulkan SR + FG replacement presentation: PASS"); return 0;
     } catch(const std::exception& error) {
         std::fprintf(stderr,"DLSS Vulkan integration: FAIL: %s\n",error.what());

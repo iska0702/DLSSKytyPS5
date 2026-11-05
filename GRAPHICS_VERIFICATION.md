@@ -1,5 +1,11 @@
 # Graphics and storage verification — 2026-10-15
 
+Latest graphics result: [2026-11-05 Frame Generation fix](docs/FRAME_GENERATION_FIX_2026-11-05.md).
+The earlier [GPU audit](docs/GRAPHICS_AUDIT_2026-11-05.md) reproduced device loss;
+after fixing manual interposer idle routing and resource synchronization, MFG 4×
+at 1080p passes 600 frames and DLSS FG 1080p passes. FSR SR/FG and MFG 3× also pass.
+These remain bounded synthetic checks; the fix report records remaining SDK validation diagnostics.
+
 Hardware: NVIDIA GeForce RTX 5060 Laptop GPU, NVIDIA driver 617.42, Windows, Vulkan. Results describe synthetic integration tests, not a guarantee for every game.
 
 | Feature | Observed result |

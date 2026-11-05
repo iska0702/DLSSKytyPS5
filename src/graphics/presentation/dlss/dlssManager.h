@@ -149,6 +149,8 @@ private:
 	PFN_vkGetSwapchainImagesKHR m_pfn_vkGetSwapchainImagesKHR = nullptr;
 	PFN_vkCreateSwapchainKHR  m_pfn_vkCreateSwapchainKHR  = nullptr;
 	PFN_vkDestroySwapchainKHR m_pfn_vkDestroySwapchainKHR = nullptr;
+	PFN_vkDeviceWaitIdle      m_pfn_vkDeviceWaitIdle      = nullptr;
+	PFN_vkDeviceWaitIdle      m_native_vkDeviceWaitIdle   = nullptr;
 #if defined(_WIN32)
 	PFN_vkCreateWin32SurfaceKHR m_pfn_vkCreateWin32SurfaceKHR = nullptr;
 	PFN_vkDestroySurfaceKHR     m_pfn_vkDestroySurfaceKHR     = nullptr;

@@ -1,6 +1,6 @@
 # KytyPS5 (NVIDIA DLSS, Frame Generation & DirectStorage Fork)
 
-[![Version](https://img.shields.io/badge/release-v1.6.0-orange.svg)](https://github.com/iska0702/DLSSKytyPS5/releases/tag/v1.6.0)
+[![Version](https://img.shields.io/badge/release-v1.6.5-orange.svg)](https://github.com/iska0702/DLSSKytyPS5/releases/tag/v1.6.5)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#system-requirements)
 [![Base](https://img.shields.io/badge/upstream-Jetsku%2FKytyPS5%20int21-green.svg)](https://github.com/Jetsku/KytyPS5)
 [![License](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
@@ -8,6 +8,13 @@
 An advanced experimental fork of [Jetsku/KytyPS5](https://github.com/Jetsku/KytyPS5) (`u59 int21`), integrating **NVIDIA DLSS 3 / DLSS 4 Multi-Frame Generation (MFG)**, **AMD FSR 3.1**, **NVIDIA Reflex**, and **Microsoft DirectStorage** asset streaming for PlayStation 5 emulation on Windows x64.
 
 ---
+
+## v1.6.5 — Frame Generation synchronization fixes
+
+Fixes the reproduced MFG 4× and DLSS FG 1080p device losses caused by bypassing
+Streamline's Vulkan idle synchronization. A 600-frame 1080p GPU test now confirms
+the requested 4× multiplier. FSR FG, DLSS FG 2× and MFG 3× checks also pass.
+See [release notes](RELEASE_NOTES_1.6.5.md) for validation scope and remaining limitations.
 
 ## Bundled Libraries & DLL Versions
 
@@ -32,7 +39,7 @@ An advanced experimental fork of [Jetsku/KytyPS5](https://github.com/Jetsku/Kyty
 ### 2. Multi-Frame Generation (MFG 2x, 3x, 4x, Dynamic)
 - **2x Multiplier (DLSS 3):** Generates 1 interpolated frame per rendered frame (supported on GeForce RTX 40 & 50 series).
 - **3x / 4x Multipliers (DLSS 4 MFG):** Multi-frame generation synthesizing 2 or 3 frames per rendered frame.
-- **Dynamic Multiplier:** Real-time adaptive frame generation based on display refresh rate headroom.
+- **Dynamic Multiplier:** Native dynamic mode is used only when the SDK/driver reports support; otherwise the application reports its fixed-multiplier fallback explicitly.
 
 ### 3. NVIDIA Reflex Low Latency
 - Native Reflex integration (`On`, `On + Boost`, `Off`) tightly coupled with swapchain presentation and frame pacing.
@@ -42,8 +49,8 @@ An advanced experimental fork of [Jetsku/KytyPS5](https://github.com/Jetsku/Kyty
 - Built-in Vulkan backend providing vendor-agnostic upscaling and 2x frame generation for AMD Radeon and Intel Arc graphics.
 
 ### 5. Microsoft DirectStorage Fast I/O
-- Asynchronous GPU/CPU asset decompression and streaming bypasses conventional Win32 file bottlenecks.
-- Accelerated package streaming from raw game directories and compressed ZArchive (`.zar`) containers.
+- Asynchronous APR/file reads and verified mapped Vulkan texture sources support asset streaming.
+- ZArchive (`.zar`) members retain their ordinary archive-reader fallback; PS5 archive GPU decompression is not implemented. See [DirectStorage details](README_DIRECTSTORAGE.md).
 
 ### 6. Full ZArchive Cheat & Patch Support
 - Transparent SHA-256 calculation for virtual files loaded from `.zar` containers (e.g. `PPSA21567.zar!\eboot.bin`), resolving cheat errors in *Astro Bot* and other games.

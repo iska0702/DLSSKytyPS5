@@ -163,6 +163,8 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
 			GetProcAddress(hInterposer, "vkCreateSwapchainKHR"));
 		m_pfn_vkDestroySwapchainKHR = reinterpret_cast<PFN_vkDestroySwapchainKHR>(
 			GetProcAddress(hInterposer, "vkDestroySwapchainKHR"));
+		m_pfn_vkDeviceWaitIdle = reinterpret_cast<PFN_vkDeviceWaitIdle>(
+			GetProcAddress(hInterposer, "vkDeviceWaitIdle"));
 #if defined(_WIN32)
 		m_pfn_vkCreateWin32SurfaceKHR = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(
 			GetProcAddress(hInterposer, "vkCreateWin32SurfaceKHR"));
@@ -340,6 +342,13 @@ bool DLSSManager::SetupStreamline(GraphicContext& graphics) {
     }
 
 	if (m_settings.rr_enabled) m_rr.Initialize(graphics.physical_device);
+	// Manual Vulkan integration must also route DeviceWaitIdle through the
+	// interposer. Its before-hook drains/coordinates the SDK worker queues;
+	// calling the native function directly races their submissions.
+	if (m_pfn_vkDeviceWaitIdle != nullptr) {
+		m_native_vkDeviceWaitIdle = VULKAN_HPP_DEFAULT_DISPATCHER.vkDeviceWaitIdle;
+		VULKAN_HPP_DEFAULT_DISPATCHER.vkDeviceWaitIdle = m_pfn_vkDeviceWaitIdle;
+	}
 	m_streamline_loaded = true;
 	m_available = true;
 	m_status = DLSSStatus::Available;
@@ -563,10 +572,11 @@ bool DLSSManager::PrepareResources(GraphicContext& graphics, vk::Extent2D input_
 				g_options.mode = sl::DLSSGMode::eDynamic;
 				g_options.dynamicTargetFrameRate = 0.0f; // Auto-align with display refresh rate
 			} else {
-				// Dynamic MFG is D3D12-only in current Streamline; in Vulkan backend, use maximum supported multiplier
+				// Capability comes from the SDK/driver query, not from the API name.
+				// Keep the fixed fallback explicit when native dynamic mode is unavailable.
 				g_options.mode = sl::DLSSGMode::eOn;
 				g_options.numFramesToGenerate = (std::min)(m_max_fg_frames, 3u);
-				std::printf("[DLSS] Dynamic MFG is D3D12-only; falling back to fixed %ux multiplier for Vulkan\n",
+				std::printf("[DLSS] Native Dynamic MFG unavailable on this SDK/driver; using fixed %ux multiplier\n",
 				            g_options.numFramesToGenerate + 1);
 			}
 		} else {
@@ -803,13 +813,16 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		to_general.sType               = vk::StructureType::eImageMemoryBarrier;
 		to_general.oldLayout           = vk::ImageLayout::eUndefined;
 		to_general.newLayout           = vk::ImageLayout::eGeneral;
-		to_general.srcAccessMask       = vk::AccessFlagBits {};
-		to_general.dstAccessMask       = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead;
+		to_general.srcAccessMask       = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
+		// NGX can clear the target before compute writes; both operations need
+		// visibility, including on the first frame after allocation or resize.
+		to_general.dstAccessMask       = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eShaderRead |
+		                                vk::AccessFlagBits::eTransferWrite;
 		to_general.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		to_general.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		to_general.image               = m_output_image.image;
 		to_general.subresourceRange    = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
-		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+		cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
 		                           vk::PipelineStageFlagBits::eAllCommands,
 		                           vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &to_general);
 	}
@@ -892,25 +905,11 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 		tags.emplace_back(&out_color_res, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &out_extent);
 	}
 
-	sl::Resource backbuffer_res(sl::ResourceType::eTex2d, nullptr, nullptr, nullptr, 0);
-	if (backbuffer_image != nullptr && backbuffer_view != nullptr) {
-		backbuffer_res = sl::Resource(sl::ResourceType::eTex2d,
-		                              static_cast<void*>(static_cast<VkImage>(backbuffer_image)),
-		                              nullptr,
-		                              static_cast<void*>(static_cast<VkImageView>(backbuffer_view)),
-		                              static_cast<uint32_t>(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR));
-		backbuffer_res.width = target_extent.width;
-		backbuffer_res.height = target_extent.height;
-		backbuffer_res.nativeFormat = (m_swapchain_format != vk::Format::eUndefined)
-		                                  ? static_cast<uint32_t>(m_swapchain_format)
-		                                  : static_cast<uint32_t>(m_output_image.format);
-		backbuffer_res.mipLevels = 1;
-		backbuffer_res.arrayLayers = 1;
-		backbuffer_res.flags = 0;
-		backbuffer_res.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-		backbuffer_res.internalFlags = sl::Resource::eVulkanSwapChainImage;
-		tags.emplace_back(&backbuffer_res, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &out_extent);
-	}
+	// Full-frame DLSS-G uses the replacement swapchain's own backbuffer. The
+	// explicit Backbuffer tag is for subregions (DLSS-G guide section 17), not
+	// the application's pre-present image/view, which may still be transfer-only.
+	// Clear any earlier explicit tag instead of aliasing the swapchain resource.
+	tags.emplace_back(nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &out_extent);
 
 	sl::ViewportHandle viewport(m_viewport_id);
 	sl::FrameToken* frame_token = nullptr;
@@ -1049,7 +1048,7 @@ bool DLSSManager::Evaluate(GraphicContext& graphics, vk::CommandBuffer cmd_buffe
 			to_src.sType               = vk::StructureType::eImageMemoryBarrier;
 			to_src.oldLayout           = vk::ImageLayout::eGeneral;
 			to_src.newLayout           = vk::ImageLayout::eTransferSrcOptimal;
-			to_src.srcAccessMask       = vk::AccessFlagBits::eShaderWrite;
+			to_src.srcAccessMask       = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite;
 			to_src.dstAccessMask       = vk::AccessFlagBits::eTransferRead;
 			to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 			to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -1154,11 +1153,20 @@ void DLSSManager::SetPresentMarker(bool start) {
 }
 
 void DLSSManager::ReleaseResources(GraphicContext& graphics) {
-	if (m_streamline_loaded && m_fg_active && (!m_settings.fg_enabled || m_settings.fg_mode == DLSSGMode::Off)) {
+	if (graphics.queue != nullptr && m_output_image.image != nullptr) {
+		Common::LockGuard lock(graphics.queue_mutex);
+		graphics.submission_queue.DrainPendingLocked();
+		(void)graphics.device.waitIdle();
+	}
+	// Finish DLSS-G's own work before releasing its tagged inputs or destroying
+	// the replacement swapchain. Waiting the application queue alone cannot drain
+	// the SDK's separately owned generation/pacing queues.
+	if (m_streamline_loaded && m_fg_supported && m_output_image.image != nullptr) {
 		sl::ViewportHandle viewport(m_viewport_id);
 		sl::DLSSGOptions off {};
 		off.mode = sl::DLSSGMode::eOff;
 		slDLSSGSetOptions(viewport, off);
+		slFreeResources(sl::kFeatureDLSS_G, viewport);
 		m_fg_active = false;
 	}
 	m_last_frame_token = nullptr;
@@ -1184,19 +1192,20 @@ void DLSSManager::ReleaseResources(GraphicContext& graphics) {
 }
 
 void DLSSManager::Shutdown(GraphicContext& graphics) {
+	ReleaseResources(graphics);
 	if (graphics.device != nullptr) {
 		try {
 			(void)graphics.device.waitIdle();
 		} catch (...) {}
 	}
-	ReleaseResources(graphics);
-
 	if (m_streamline_loaded) {
 		sl::ViewportHandle viewport(m_viewport_id);
 		if (m_fg_supported) {
-			sl::DLSSGOptions g_options {};
-			g_options.mode = sl::DLSSGMode::eOff;
-			slDLSSGSetOptions(viewport, g_options);
+			if (m_fg_active) {
+				sl::DLSSGOptions g_options {};
+				g_options.mode = sl::DLSSGMode::eOff;
+				slDLSSGSetOptions(viewport, g_options);
+			}
 			slFreeResources(sl::kFeatureDLSS_G, viewport);
 		}
 		m_rr.Shutdown();
@@ -1204,6 +1213,12 @@ void DLSSManager::Shutdown(GraphicContext& graphics) {
 		slShutdown();
 		m_streamline_loaded = false;
 	}
+	if (m_native_vkDeviceWaitIdle != nullptr &&
+	    VULKAN_HPP_DEFAULT_DISPATCHER.vkDeviceWaitIdle == m_pfn_vkDeviceWaitIdle) {
+		VULKAN_HPP_DEFAULT_DISPATCHER.vkDeviceWaitIdle = m_native_vkDeviceWaitIdle;
+	}
+	m_pfn_vkDeviceWaitIdle = nullptr;
+	m_native_vkDeviceWaitIdle = nullptr;
 
 	m_pfn_vkQueuePresentKHR       = nullptr;
 	m_pfn_vkAcquireNextImageKHR   = nullptr;
@@ -1368,6 +1383,11 @@ bool DLSSManager::HasCreateSwapchainProxy() const noexcept {
 void DLSSManager::DestroySwapchain(VkDevice device, VkSwapchainKHR swapchain,
                                    const VkAllocationCallbacks* allocator) {
 	if (m_pfn_vkDestroySwapchainKHR != nullptr) {
+		if (m_pfn_vkDeviceWaitIdle != nullptr) {
+			const auto drained = m_pfn_vkDeviceWaitIdle(device);
+			if (drained != VK_SUCCESS && drained != VK_ERROR_DEVICE_LOST)
+				Log::WriteToConsoleAndLog(fmt::format("[DLSS] Swapchain drain failed: {}\n",static_cast<int>(drained)));
+		}
 		m_pfn_vkDestroySwapchainKHR(device, swapchain, allocator);
 	}
 }

@@ -1,4 +1,11 @@
-# KytyPS5 U59 int21
+# DLSSKytyPS5 1.6.5
+
+Frame Generation synchronization, resource teardown and camera jitter fixes.
+The 1080p MFG 4× GPU check completed 600 application frames at the requested
+multiplier. See [1.6.5 release notes](../RELEASE_NOTES_1.6.5.md) for test scope,
+installation and known limitations. The upstream base remains U59 int21.
+
+## Upstream base: KytyPS5 U59 int21
 
 int21 is int20 plus faster draw validation, fixes for GPU device losses and a silent exit, the latest upstream KytyPS5 changes, ports from chenxiao07's fork and a new profile-guided optimisation profile; the older notes are in docs/release-notes-history.md. The first launch rebuilds the shader and program caches once (the pipeline key changed), so the first minutes can stutter.
 

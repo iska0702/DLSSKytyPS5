@@ -71,6 +71,13 @@ int main() {
     v[0] = 1.20628512f; v[28] = v[60] = 0; set_jitter(0.9375f, -0.85185f);
     check(DecodeAstroDLSSCamera(v, 1708, 960).valid, "Astro gameplay jitter amplitude retained");
     set_jitter(2, 0);
+    check(DecodeAstroDLSSCamera(v, 1708, 960).valid, "two-pixel jitter accepted by current camera policy");
+    set_jitter(3, -3.5f);
+    const auto large_jitter = DecodeAstroDLSSCamera(v, 1708, 960);
+    check(large_jitter.valid && std::abs(large_jitter.jitter_pixels[0]+3)<1e-5f &&
+          std::abs(large_jitter.jitter_pixels[1]-3.5f)<1e-5f,
+          "accepted jitter matches actual projection displacement without clipping");
+    set_jitter(4.01f, 0);
     check(!DecodeAstroDLSSCamera(v, 1708, 960).valid, "out-of-range jitter rejected");
     DLSSMatrix singular {};
     check(!DLSSInvert(singular, identity), "singular matrix rejected");
