@@ -21,11 +21,11 @@ See [release notes](RELEASE_NOTES_1.6.5.md) for validation scope and remaining l
 | Component | Library / DLL | Version | Purpose |
 |---|---|---|---|
 | **NVIDIA Streamline** | `sl.interposer.dll` | `2.14.1` | Interposer framework coordinating graphics hooks |
-| **DLSS Super Resolution** | `sl.dlss.dll`, `nvngx_dlss.dll` | `3.10.6` | AI-accelerated spatial-temporal upscaling & DLAA |
-| **DLSS Frame Generation** | `sl.dlss_g.dll`, `nvngx_dlssg.dll` | `3.10.6` | 2x Frame Generation & 3x/4x/Dynamic Multi-Frame Gen |
+| **DLSS Super Resolution** | `sl.dlss.dll`, `nvngx_dlss.dll` | `310.9.1.0` (NGX file version) | AI-accelerated spatial-temporal upscaling & DLAA |
+| **DLSS Frame Generation** | `sl.dlss_g.dll`, `nvngx_dlssg.dll` | `310.9.1.0` (NGX file version) | 2x Frame Generation & 3x/4x/Dynamic Multi-Frame Gen |
 | **NVIDIA Reflex** | `sl.reflex.dll` | `2.14.1` | Render queue and system latency reduction |
 | **AMD FSR 3** | Built-in Vulkan backend | `3.1.2` | High-fidelity FidelityFX Super Resolution & Frame Gen |
-| **DirectStorage** | `dstorage.dll`, `dstoragecore.dll` | `1.2.3` | Direct NVMe bypass streaming for game packages & `.zar` |
+| **DirectStorage** | `dstorage.dll`, `dstoragecore.dll` | `1.2.2407.1501` (file version) | Async file reads and mapped texture streaming; archive-reader fallback for `.zar` |
 
 ---
 

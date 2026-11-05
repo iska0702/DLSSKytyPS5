@@ -1,47 +1,48 @@
 # DLSSKytyPS5 1.6.5
 
-## Исправления
+## Fixes
 
-- Устранены воспроизведённые `ErrorDeviceLost` в тестах MFG 4× и DLSS FG 1080p:
-  ожидание Vulkan теперь проходит через interposer Streamline и синхронизирует
-  фоновые очереди генерации/представления кадров.
-- Исправлен порядок освобождения входов FG и swapchain; исходный Vulkan-обработчик
-  восстанавливается после выгрузки Streamline.
-- Барьеры выходного изображения учитывают transfer-очистку NGX и compute-запись.
-- Устранено рассогласование jitter камеры с матрицами: допустимое смещение больше
-  не обрезается только в параметрах SDK.
-- Сообщение Dynamic MFG отражает реальный ответ SDK/драйвера и явно сообщает о
-  переходе на фиксированный множитель.
+- Fix reproduced `ErrorDeviceLost` failures in MFG 4× and DLSS FG 1080p tests.
+  Vulkan idle waits now use Streamline's interposer to coordinate its background
+  generation and presentation queues.
+- Drain FG work before releasing tagged inputs and destroying the swapchain;
+  restore the original Vulkan idle handler after Streamline shutdown.
+- Cover NGX transfer clears and compute writes in output-image barriers.
+- Keep accepted camera jitter consistent with projection and motion data instead
+  of clipping only the SDK's jitter offset.
+- Report the SDK/driver's native Dynamic MFG capability accurately and explicitly
+  identify the fixed-multiplier fallback when dynamic mode is unavailable.
 
-## Проверка
+## Verification
 
-На RTX 5060 Laptop GPU, драйвер Windows `32.0.16.2101`:
+Tested on an RTX 5060 Laptop GPU with Windows driver `32.0.16.2101`:
 
-| Режим | Результат GPU-теста |
+| Mode | GPU test result |
 | --- | --- |
-| DLSS SR + MFG 4×, 1080p | 600 кадров, фактический множитель 4×, без потери устройства |
-| DLSS SR + FG 2×, 1080p | Успешно, фактический множитель 2× |
-| DLSS SR + MFG 3×, 720p | Успешно, фактический множитель 3× |
-| FSR SR + FG 2× | Эталонное GPU-чтение; 6 presents из 3 кадров приложения |
-| Камера, CLI, пресет U59 | 3/3 регрессионных проверки |
+| DLSS SR + MFG 4×, 1080p | 600 application frames, observed 4× multiplier, no device loss |
+| DLSS SR + FG 2×, 1080p | Passed, observed 2× multiplier |
+| DLSS SR + MFG 3×, 720p | Passed, observed 3× multiplier |
+| FSR SR + FG 2× | Reference GPU readback; 6 actual presents from 3 application frames |
+| Camera, CLI, U59 preset | 3/3 regression checks passed |
 
-В тестах добавлены отдельные режимы MFG 3×/4× и длительная проверка с
-`KYTY_DLSS_TEST_FRAMES=130..3600`. Пониженный множитель не считается успешным тестом.
+New GPU test modes cover MFG 3×/4× and longer runs with
+`KYTY_DLSS_TEST_FRAMES=130..3600`. A lower fallback multiplier cannot pass a test
+that requests a higher multiplier.
 
-## Ограничения
+## Known limitations
 
-- Это ограниченные синтетические проверки, а не гарантия длительной стабильности
-  во всех играх. В последовательностях Streamline/NGX остаются сообщения Vulkan
-  Validation; полностью чистая проверка не заявляется.
-- Проверенный драйвер не предоставляет native Dynamic MFG. Его поддержка не подменяется.
-- Игровой DLSS Ray Reconstruction в ASTRO BOT/PLAYROOM не завершён и не объявляется рабочим.
-- Для FG/MFG окно приложения должно оставаться активным.
+- These are bounded synthetic checks, not a guarantee of long-session stability
+  in every game. Some Vulkan Validation diagnostics remain in Streamline/NGX
+  sequences; a completely clean validation run is not claimed.
+- The tested driver does not expose native Dynamic MFG. Support is not fabricated.
+- Game DLSS Ray Reconstruction integration in ASTRO BOT/PLAYROOM remains incomplete.
+- Keep the application window focused for FG/MFG.
 
-Подробности: [отчёт об исправлении](docs/FRAME_GENERATION_FIX_2026-11-05.md).
+Details: [Frame Generation fix report](docs/FRAME_GENERATION_FIX_2026-11-05.md).
 
-## Установка
+## Installation
 
-Распакуйте Windows x64 архив в отдельную папку и запустите `kyty_launcher.exe`.
-Архив содержит runtime DLL, Qt-плагины, пресет U59, патчи и лицензии. Сохранения,
-шейдерные кэши и локальные настройки в комплект не входят. Может потребоваться
-Microsoft Visual C++ Redistributable x64. Контрольная сумма публикуется рядом с ZIP.
+Extract the Windows x64 archive into a new folder and run `kyty_launcher.exe`.
+The package includes runtime DLLs, Qt plugins, the U59 preset, patches and licenses.
+Local saves, shader caches and settings are excluded. Microsoft Visual C++
+Redistributable x64 may be required. A SHA-256 checksum accompanies the ZIP.
