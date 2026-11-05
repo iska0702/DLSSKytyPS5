@@ -1,10 +1,12 @@
 param(
     [Parameter(Mandatory=$true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
-    [string]$BuildDirectory = (Join-Path $PSScriptRoot '..\build'),
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\build\releases')
+    [string]$BuildDirectory = '',
+    [string]$OutputDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if (-not $BuildDirectory) { $BuildDirectory = Join-Path $repoRoot 'build' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'build\releases' }
 $buildRoot = (Resolve-Path $BuildDirectory).Path
 $releaseRoot = Join-Path ([IO.Path]::GetFullPath($OutputDirectory)) "v$Version"
 $packageName = "DLSSKytyPS5-v$Version-Windows-x64"
