@@ -32,6 +32,9 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSES') -Destination $packageRoo
 $sdkRoot = Join-Path $repoRoot '..\streamline-sdk-v2.14.1'
 Copy-Item -LiteralPath (Join-Path $sdkRoot 'license.txt') -Destination (Join-Path $packageRoot 'LICENSES\Streamline.txt')
 Copy-Item -LiteralPath (Join-Path $sdkRoot '3rd-party-licenses.md') -Destination (Join-Path $packageRoot 'LICENSES\Streamline-third-party.md')
+$storageSdk = Join-Path $repoRoot '..\DirectStorage_SDK'
+Copy-Item -LiteralPath (Join-Path $storageSdk 'LICENSE.txt') -Destination (Join-Path $packageRoot 'LICENSES\DirectStorage.txt')
+Copy-Item -LiteralPath (Join-Path $storageSdk 'NOTICES.txt') -Destination (Join-Path $packageRoot 'LICENSES\DirectStorage-NOTICES.txt')
 
 $required = @('kyty_emulator.exe','kyty_launcher.exe','kyty_updater.exe','u59-preset.json',
     'Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Network.dll','platforms\qwindows.dll',
